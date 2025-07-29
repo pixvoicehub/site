@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL COM CONVERSÃO PARA MP3
+# app.py - VERSÃO FINAL COM CORREÇÃO DO ATRIBUTO 'content'
 import os
 import base64
 import mimetypes
@@ -50,7 +50,7 @@ def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
             param = param.strip()
             if param.lower().startswith("rate="):
                 try:
-                    rate = int(param.split("=", 1))
+                    rate = int(param.split("=", 1)[1])
                 except (ValueError, IndexError):
                     pass
     return {"bits_per_sample": bits_per_sample, "rate": rate}
@@ -88,8 +88,9 @@ def generate_narration():
         for chunk in client.models.generate_content_stream(
             model=model, contents=contents, config=generate_content_config
         ):
-            if chunk.candidates and chunk.candidates.content and chunk.candidates.content.parts:
-                part = chunk.candidates.content.parts
+            # A CORREÇÃO ESTÁ NA LINHA ABAIXO
+            if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
+                part = chunk.candidates[0].content.parts[0] # Acessando o primeiro candidato e a primeira parte
                 if part.inline_data and part.inline_data.data:
                     full_audio_data.extend(part.inline_data.data)
                     if part.inline_data.mime_type:
