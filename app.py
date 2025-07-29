@@ -2,28 +2,25 @@ import os
 import base64
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_cors import CORS
-import google.generativeai as genai
-from dotenv import load_dotenv
+# Importações para a NOVA SDK
+from google.generativeai import GenerativeModel, configure
+# Pode ser que a configuração de TTS esteja em outro lugar
 
 load_dotenv()
 
 app = Flask(__name__)
-
-# --- Configuração CORS ---
 CORS(app)
 
-# --- Configuração da API do Gemini ---
+# --- Configuração da API do Gemini (NOVA SDK) ---
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
     print("ERRO CRÍTICO: A chave da API do Gemini (GEMINI_API_KEY) não está definida nas variáveis de ambiente.")
+configure(api_key=api_key) # <<< ALTERAÇÃO NA CONFIGURAÇÃO
 
-genai.configure(api_key=api_key)
-
-# O modelo TTS pode ser diferente dependendo da versão da SDK e da disponibilidade
-# "gemini-1.5-pro-latest" ou modelos específicos de TTS podem ser necessários.
-# Para TTS, modelos como "text-bison" ou modelos do Vertex AI podem ser mais adequados se o Gemini não tiver TTS direto.
-# Vamos manter o seu modelo por enquanto, mas saiba que pode ser necessário alterá-lo se não for o correto para TTS.
-model_name = "gemini-2.5-pro-preview-tts" # MANTENHA O SEU MODELO POR ENQUANTO
+# O nome do modelo TTS pode ser diferente na nova SDK, ou o acesso a ele.
+# Verifique a documentação oficial para encontrar o modelo TTS correto.
+# Se não houver um modelo direto de TTS com este nome, pode ser necessário usar outro serviço.
+model_name = "gemini-2.5-pro-preview-tts" # MANTENHA ESTE POR ENQUANTO, MAS ESTEJA CIENTE QUE PODE SER NECESSÁRIO MUDAR
 
 # --- Rotas da Aplicação ---
 
@@ -43,60 +40,42 @@ def generate_narration():
 
     if not text_to_speak or not voice_id:
         return jsonify({"error": "Texto e ID do locutor são obrigatórios."}), 400
-
     if not api_key:
         return jsonify({"error": "Chave da API do Gemini não configurada."}), 500
 
     try:
-        # --- TENTATIVA DE ESPECIFICAÇÃO DA VOZ (SEM genai.tts) ---
-        # A forma de especificar a voz para TTS pode ser através de um objeto de configuração
-        # ou um argumento direto no 'generate_content'.
-        # Vamos tentar passar um argumento 'generation_config' com a voz.
-        # É CRUCIAL VERIFICAR NA DOCUMENTAÇÃO COMO FAZER ISSO CORRETAMENTE.
+        # --- ACESSO AO MODELO E GERAÇÃO DE ÁUDIO (NOVA SDK) ---
+        # A forma de chamar um modelo TTS com a nova SDK será diferente.
+        # Provavelmente você instanciará um modelo de TTS e chamará um método específico.
 
-        # Exemplo genérico (PODE SER QUE NÃO FUNCIONE, VOCÊ PRECISA CONFIRMAR NA DOC)
-        # O Google AI Studio e a API podem ter formas diferentes de especificar vozes.
-        # Uma forma comum é usar um dicionário de configuração.
-        generation_config = {
-            "voice": {
-                "name": voice_id # Tenta passar o voice_id diretamente aqui
-                # Dependendo da API, pode precisar de mais campos como 'language_code'
-            }
-            # Outra possibilidade é que o argumento seja 'tts_config'
-            # tts_config={"voice": {"name": voice_id}}
-        }
+        # Exemplo HIPOTÉTICO (VOCÊ PRECISA CONFIRMAR NA DOC):
+        # model = GenerativeModel('gemini-2.5-pro-preview-tts') # OU UM MODELO TTS ESPECÍFICO
+        # response = model.generate_content(
+        #     text_to_speak,
+        #     generation_config={"voice": {"name": voice_id}} # Ou outra forma de passar a voz
+        # )
 
+        # A documentação do google-genai para TTS sugere algo como:
+        # model = genai.GenerativeModel('gemini-2.5-pro-preview-tts') # Use a nova forma de instanciar
+        # response = model.generate_content(
+        #     text=text_to_speak,
+        #     generation_config={"voice": {"name": voice_id}}
+        # )
+        # E a extração de áudio pode ser response.audio.get_wav_data()
 
-        response = genai.generate_content(
-            model=model_name,
-            contents=[
-                genai.Candidate(
-                    content=genai.Part(
-                        text=text_to_speak
-                        # A voz não é passada aqui diretamente no 'Part' se for por config.
-                    )
-                )
-            ],
-            generation_config=generation_config # Tenta passar a configuração aqui
-            # OU se a doc indicar, pode ser um argumento diferente:
-            # tts_config=genai.TtsConfig(...) # (mas genai.tts.TtsConfig não existe)
-            # O mais provável é que generation_config seja o caminho.
+        # Tentativa com base no que foi visto na documentação do google-genai:
+        model = GenerativeModel(model_name) # Instancia o modelo
+        response = model.generate_content(
+            text=text_to_speak,
+            generation_config={"voice": {"name": voice_id}} # Passa a voz na configuração
         )
 
-        # --- EXTRAÇÃO DE ÁUDIO ---
-        # A forma de obter o áudio da resposta pode ter mudado.
-        # Se o response.candidates[0].content.audio.get_wav_data() der erro,
-        # você precisará verificar como a API retorna o áudio.
-        # Pode ser que o response.audio.get_wav_data() seja o correto.
-
-        # Tenta obter o áudio usando a estrutura que parece mais comum após a atualização:
-        if hasattr(response.candidates[0].content, 'audio') and hasattr(response.candidates[0].content.audio, 'get_wav_data'):
-             audio_content = response.candidates[0].content.audio.get_wav_data()
-        elif hasattr(response, 'audio') and hasattr(response.audio, 'get_wav_data'): # Outra possibilidade
+        # Extrai o áudio. A forma de obter o áudio pode ser diferente.
+        # O .audio.get_wav_data() pode ser agora response.audio.get_wav_data()
+        if hasattr(response, 'audio') and hasattr(response.audio, 'get_wav_data'):
              audio_content = response.audio.get_wav_data()
         else:
-             # Se nenhuma das formas funcionar, precisamos de mais informações sobre a resposta da API.
-             raise ValueError("Formato de áudio inesperado na resposta da API.")
+             raise ValueError("Formato de áudio inesperado na resposta da API com a nova SDK.")
 
         audio_base64 = base64.b64encode(audio_content).decode('utf-8')
 
@@ -104,18 +83,21 @@ def generate_narration():
 
     except AttributeError as ae:
         print(f"ERRO DE ATRIBUTO: {ae}")
-        print("A estrutura da SDK do Google Gemini pode ter mudado ou a versão é incompatível.")
-        print("Recomendação: Verifique a documentação oficial mais recente para APIs de TTS.")
-        return jsonify({"error": f"Erro interno: Atributo não encontrado no módulo Gemini ({ae}). Verifique a versão da SDK."}), 500
-    except ValueError as ve: # Captura o erro de formato de áudio inesperado
+        print("Isso pode acontecer se a nova SDK 'google-genai' não for usada corretamente ou se o modelo TTS mudar.")
+        return jsonify({"error": f"Erro interno: Atributo não encontrado na nova SDK Gemini ({ae}). Verifique a documentação."}), 500
+    except ValueError as ve:
         print(f"ERRO DE VALOR: {ve}")
         return jsonify({"error": f"Erro ao processar a resposta de áudio: {ve}"}), 500
     except Exception as e:
         print(f"ERRO GERAL ao gerar narração: {e}")
         return jsonify({"error": f"Ocorreu um erro ao gerar a narração: {e}"}), 500
 
-# --- Bloco Principal para Execução Local ---
+# Bloco principal (para rodar localmente)
 if __name__ == '__main__':
-    # Para rodar localmente, garanta que seu arquivo .env tenha a chave correta
-    # e que as pastas 'templates' e 'static/js' estejam com os arquivos 'index.html' e 'voices.js'.
-    app.run(debug=False, port=5000)
+    app.run(debug=False, port=5000)```
+
+**Ação imediata:**
+
+1.  **Atualize o `requirements.txt`:** Mude para `google-genai` e remova `google-generativeai`.
+2.  **Aguarde o deploy no Render** com o novo `requirements.txt`.
+3.  **Consulte a documentação oficial do `google-genai` para TTS** e adapte o `app.py` conforme as instruções deles. O exemplo que dei acima é uma tentativa baseada em como outras SDKs funcionam, mas o Google pode ter uma estrutura específica.
