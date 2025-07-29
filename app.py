@@ -1,13 +1,10 @@
---- START OF FILE app.py.txt ---
-
 import os
 import base64
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_cors import CORS
 # Importa a nova SDK do Google Generative AI e o módulo TTS
-from google.generativeai import configure
-# Provavelmente não precisamos mais de GenerativeModel para TTS, mas vamos importar para ter acesso a genai.tts
-import google.generativeai as genai # Importa o módulo principal para acessar genai.text_to_speech
+# Com a nova SDK, o acesso a text_to_speech e às configs de voz pode ser direto no módulo genai
+import google.generativeai as genai
 from dotenv import load_dotenv
 
 # Carrega as variáveis de ambiente do arquivo .env (útil para rodar localmente).
@@ -16,22 +13,22 @@ load_dotenv()
 app = Flask(__name__)
 
 # --- Configuração CORS ---
+# Permite requisições de qualquer origem. Em produção, restrinja para seu domínio.
+# Ex: CORS(app, resources={r"/generate-narration": {"origins": "https://seu-dominio.com"}} )
 CORS(app)
 
 # --- Configuração da API do Gemini ---
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
-    print("ERRO CRÍTICO: A chave da API do Gemini (GEMINI_API_KEY) não está definida nas variáveis de ambiente.")
-    # Em um cenário de produção, é crucial que a chave exista.
-    # Se a chave não existir, as chamadas de API falharão.
+    # Erro crítico se a chave não for encontrada. A aplicação não pode funcionar.
+    # Levanta um erro que será capturado pelo Gunicorn/Render e exibido nos logs.
+    raise ValueError("ERRO CRÍTICO: A chave da API do Gemini (GEMINI_API_KEY) não está definida.")
 
-# Configura a SDK do Google Generative AI com a chave obtida.
-if api_key:
-    try:
-        configure(api_key=api_key)
-    except Exception as e:
-        print(f"ERRO ao configurar a API do Gemini: {e}")
-        # Se a configuração falhar, as chamadas de API também falharão.
+try:
+    genai.configure(api_key=api_key)
+except Exception as e:
+    # Levanta um erro em tempo de execução se a configuração falhar.
+    raise RuntimeError(f"ERRO ao configurar a API do Gemini: {e}")
 
 # --- Define o Modelo Correto para TTS ---
 # Conforme o artigo, tts-004 é o modelo recomendado.
@@ -41,91 +38,58 @@ model_tts_name = "tts-004"
 
 @app.route('/')
 def index():
-    """
-    Renderiza o arquivo index.html.
-    O carregamento dos locutores é feito pelo JavaScript externo (voices.js).
-    """
+    """Renderiza a página principal."""
     return render_template('index.html')
 
 @app.route('/static/<path:filename>')
 def static_files(filename):
-    """
-    Serve arquivos estáticos (CSS, JavaScript, imagens) da pasta 'static'.
-    Essencial para carregar o voices.js.
-    """
+    """Serve arquivos estáticos (CSS, JS)."""
     return send_from_directory('static', filename)
-
 
 @app.route('/generate-narration', methods=['POST'])
 def generate_narration():
     """
-    Endpoint para receber requisições do frontend e gerar narração (TTS).
-    Recebe: texto a ser narrado e o ID do locutor.
-    Processa: Chama o método genai.text_to_speech().
-    Retorna: O áudio gerado em formato base64.
+    Endpoint para gerar narração usando a API de Text-to-Speech do Google.
     """
     data = request.get_json()
     text_to_speak = data.get('text')
-    voice_id = data.get('voiceId') # ID do locutor selecionado (ex: 'aoede', 'achird').
+    voice_id = data.get('voiceId')  # ID do locutor (ex: 'aoede')
 
-    # Validações básicas.
     if not text_to_speak or not voice_id:
         return jsonify({"error": "Texto e ID do locutor são obrigatórios."}), 400
 
-    # Verifica se a chave da API foi configurada corretamente.
-    if not api_key:
-        return jsonify({"error": "Chave da API do Gemini não configurada."}), 500
-
     try:
-        # --- GERAÇÃO DE ÁUDIO USANDO genai.text_to_speech() ---
-        # Conforme o artigo, o método é mais direto e não usa generation_config como antes.
-        # Os parâmetros são model, text e voice.
+        # --- GERAÇÃO DE ÁUDIO COM A NOVA SDK (MÉTODO CORRETO) ---
+        # 1. Define o modelo de TTS. 'tts-004' é o recomendado para vozes padrão.
+        #    O nome do modelo é passado como parâmetro na chamada.
 
-        # A estrutura para especificar a voz pode ser assim:
-        # Precisamos verificar se a classe 'Voice' está em 'genai.tts' ou em outro lugar.
-        # Vamos assumir que está em genai.tts.Voice por enquanto.
-        voice_config_for_tts = genai.tts.Voice(name=voice_id)
-
-        # Tenta chamar o método text_to_speech()
+        # 2. Chama a função genai.text_to_speech() com os parâmetros corretos.
+        #    O artigo sugere que a voz é passada diretamente como um parâmetro 'voice'.
         response = genai.text_to_speech(
-            model=model_tts_name, # Usa o nome do modelo TTS correto
+            model=model_tts_name,
             text=text_to_speak,
-            voice=voice_config_for_tts # Passa a configuração de voz diretamente
+            voice=voice_id  # O ID da voz é passado diretamente aqui.
         )
 
-        # --- Extração do Áudio ---
-        # O artigo indica que o áudio está em response.audio_content.
-        if hasattr(response, 'audio_content') and response.audio_content:
-             audio_content = response.audio_content
-        else:
-             # Se a estrutura da resposta for diferente, precisamos investigar.
-             raise ValueError("Formato de áudio inesperado na resposta da API.")
+        # 3. Extrai o conteúdo de áudio binário da resposta.
+        #    O artigo indica que o áudio está em response.audio_content.
+        audio_content = response.audio_content
 
-        # Codifica o conteúdo de áudio em base64 para transmissão via JSON.
+        # 4. Codifica o áudio em base64 para enviar via JSON.
         audio_base64 = base64.b64encode(audio_content).decode('utf-8')
 
-        # Retorna o áudio em base64.
         return jsonify({"audioContent": audio_base64})
 
-    except AttributeError as ae:
-        # Erro comum se a estrutura da SDK (ex: genai.tts.Voice) não for encontrada.
-        print(f"ERRO DE ATRIBUTO: {ae}")
-        print("Causa provável: Versão incompatível da SDK 'google-genai' ou API mudou.")
-        print("Verifique a documentação oficial do 'google-genai' para TTS.")
-        return jsonify({"error": f"Erro interno do servidor: Atributo não encontrado na SDK Gemini ({ae})."}), 500
-    except ValueError as ve:
-        # Erro específico para formato de áudio inesperado.
-        print(f"ERRO DE VALOR: {ve}")
-        return jsonify({"error": f"Erro ao processar a resposta de áudio: {ve}"}), 500
     except Exception as e:
-        # Captura quaisquer outros erros inesperados.
-        print(f"ERRO GERAL ao gerar narração: {e}")
-        return jsonify({"error": f"Ocorreu um erro ao gerar a narração: {e}"}), 500
+        # Captura erros da API do Google ou outros problemas.
+        print(f"ERRO ao gerar narração: {e}")
+        # Retorna uma mensagem de erro genérica e informativa para o frontend.
+        # O detalhe do erro 'e' pode ajudar na depuração.
+        return jsonify({"error": f"Ocorreu um erro no servidor ao gerar a narração. Detalhe: {e}"}), 500
 
 # --- Bloco Principal para Execução Local ---
 if __name__ == '__main__':
-    # Este bloco é executado APENAS quando você roda o script Python diretamente (ex: `python app.py`).
-    # Ele NÃO é executado pelo Gunicorn no Render.com.
-    # É fundamental que a linha app.run() esteja indentada sob este bloco.
-
-    app.run(debug=False, port=5000)
+    # Roda o servidor de desenvolvimento do Flask.
+    # Para produção no Render, use Gunicorn.
+    # A indentação de app.run() sob este bloco é crucial para evitar erros de sintaxe no deploy.
+    app.run(debug=True, port=5000)

@@ -1,5 +1,3 @@
---- START OF FILE requirements.txt ---
-
 Flask
 google-genai
 python-dotenv
