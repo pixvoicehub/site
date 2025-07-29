@@ -1,17 +1,17 @@
+
+```python
 # app.py - VERSÃO FINAL COM CONVERSÃO PARA MP3
 import os
 import base64
 import mimetypes
 import struct
+import io  # Necessário para manipulação de arquivos em memória
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
-
-# Novas importações para a conversão MP3
-from pydub import AudioSegment
-import io
+from pydub import AudioSegment # Importa a biblioteca pydub
 
 # --- Configuração Inicial ---
 load_dotenv()
@@ -48,17 +48,15 @@ def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
     """Extrai bits por amostra e taxa de um tipo MIME de áudio."""
     rate = 24000
     bits_per_sample = 16
-    parts = mime_type.split(";")
-    for param in parts:
-        param = param.strip()
-        if param.lower().startswith("rate="):
-            try:
-                rate = int(param.split("=", 1)[1])
-            except (ValueError, IndexError):
-                pass
-    if "audio/L16" in mime_type:
-        bits_per_sample = 16
-    
+    if mime_type:
+        parts = mime_type.split(";")
+        for param in parts:
+            param = param.strip()
+            if param.lower().startswith("rate="):
+                try:
+                    rate = int(param.split("=", 1)[1])
+                except (ValueError, IndexError):
+                    pass
     return {"bits_per_sample": bits_per_sample, "rate": rate}
 
 # --- Rota Principal da API ---
@@ -107,29 +105,25 @@ def generate_narration():
         # 1. Converte os dados brutos para o formato WAV em memória
         wav_data = convert_to_wav(bytes(full_audio_data), audio_mime_type)
         
-        # 2. Carrega os dados WAV no pydub a partir de um buffer de memória
-        wav_file_like = io.BytesIO(wav_data)
-        audio_segment = AudioSegment.from_file(wav_file_like, format="wav")
+        # 2. Carrega o áudio WAV em um objeto pydub
+        #    Usamos io.BytesIO para tratar os dados em bytes como um arquivo em memória
+        wav_file_in_memory = io.BytesIO(wav_data)
+        audio = AudioSegment.from_file(wav_file_in_memory, format="wav")
 
-        # 3. Exporta o áudio como MP3 para um novo buffer de memória
-        mp3_file_like = io.BytesIO()
-        audio_segment.export(mp3_file_like, format="mp3")
-        mp3_data = mp3_file_like.getvalue()
+        # 3. Exporta o áudio para o formato MP3 em memória
+        mp3_file_in_memory = io.BytesIO()
+        audio.export(mp3_file_in_memory, format="mp3")
+        mp3_data = mp3_file_in_memory.getvalue()
         
         # 4. Codifica os dados MP3 em base64 para enviar ao frontend
-        audio_baseCom certeza! Excelente ideia. O formato MP3 é muito mais eficiente para a web, resultando em arquivos menores e carregamento mais rápido para o usuário.
+        audio_base64 = base64.b64encode(mp3_data).decode('utf-8')
 
-Para fazer a conversão de WAV para MP3 no backend, precisaremos de uma biblioteca de manipulação de áudio. A mais popular e robusta para Python é a **`pydub`**. Ela é fácil de usar e se integra bem com o Flask.
+        return jsonify({"audioContent": audio_base64})
 
-O processo será o seguinte:
-1.  Receber os dados de áudio brutos do Gemini.
-2.  Construir o arquivo WAV em memória (como fizemos antes).
-3.  Usar a `pydub` para carregar este áudio WAV.
-4.  Exportar o áudio como MP3, também em memória.
-5.  Codificar o resultado MP3 em base64 e enviar para o frontend.
+    except Exception as e:
+        print(f"ERRO ao gerar narração com o SDK: {e}")
+        return jsonify({"error": f"Ocorreu um erro no servidor ao gerar a narração. Detalhe: {e}"}), 500
 
-### Passo 1: Adicionar a Biblioteca `pydub`
-
-Primeiro, você precisa adicionar a `pydub` ao seu arquivo `requirements.txt`.
-
-**`requirements.txt` (Atualizado):**
+# --- Bloco de Execução Local ---
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
