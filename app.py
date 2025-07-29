@@ -5,30 +5,32 @@ from flask_cors import CORS
 import google.generativeai as genai
 from dotenv import load_dotenv
 
+# Carrega as variáveis de ambiente do arquivo .env (se existir).
+# Isso é útil para rodar localmente. No Render, as variáveis são configuradas diretamente na plataforma.
 load_dotenv()
 
 app = Flask(__name__)
 
 # --- Configuração CORS ---
-# Ajuste a origem para a URL específica da sua Hostinger se desejar maior segurança.
-# Ex: CORS(app, resources={r"/generate-narration": {"origins": "https://seu-dominio.com"}})
+# Permite requisições de outras origens (ex: sua Hostinger para o Render).
+# Para um ambiente de produção mais seguro, restrinja a origem para a URL específica da sua Hostinger.
+# Ex: CORS(app, resources={r"/generate-narration": {"origins": "https://lightskyblue-goldfish-583784.hostingersite.com"}})
 CORS(app)
 
 # --- Configuração da API do Gemini ---
-# Certifique-se de que a variável de ambiente configurada no Render (e localmente via .env)
-# seja GEMINI_API_KEY.
+# Obtém a chave da API das variáveis de ambiente. O nome da variável deve ser GEMINI_API_KEY.
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
-    # Se a chave não estiver definida, não podemos prosseguir.
-    # Em um ambiente de produção, um log mais detalhado seria útil.
+    # Se a chave não for encontrada, exibe um erro crítico.
+    # Em produção, seria melhor usar um sistema de logging mais robusto.
     print("ERRO CRÍTICO: A chave da API do Gemini (GEMINI_API_KEY) não está definida nas variáveis de ambiente.")
-    # Para rodar localmente, crie um arquivo .env na mesma pasta do app.py com:
-    # GEMINI_API_KEY=SUA_CHAVE_SECRETA_AQUI
-    # Se você rodar isso sem a chave, a API não funcionará.
+    # O script continuará, mas chamadas à API falharão.
 
+# Configura a SDK do Google Generative AI com a chave obtida.
 genai.configure(api_key=api_key)
 
-# Modelo de TTS (Text-to-Speech) que estamos utilizando.
+# Define o nome do modelo de Text-to-Speech a ser utilizado.
+# "gemini-2.5-pro-preview-tts" é uma versão preview que pode ter recursos TTS.
 model_name = "gemini-2.5-pro-preview-tts"
 
 # --- Rotas da Aplicação ---
@@ -37,96 +39,97 @@ model_name = "gemini-2.5-pro-preview-tts"
 def index():
     """
     Renderiza o arquivo index.html.
-    Este arquivo HTML foi projetado para ser populado dinamicamente pelo JavaScript
-    carregado de um arquivo externo (voices.js).
+    Este arquivo HTML é responsável por carregar dinamicamente os dados dos locutores
+    através de um arquivo JavaScript externo (voices.js).
     """
-    # Não precisamos mais passar os dados das vozes via render_template,
-    # pois o JavaScript cuidará disso.
+    # O Render.com serve arquivos HTML do diretório 'templates' por padrão.
     return render_template('index.html')
 
 @app.route('/static/<path:filename>')
 def static_files(filename):
     """
-    Serve arquivos estáticos (como CSS, JavaScript, imagens)
-    que estão localizados na pasta 'static' do seu projeto.
-    Isso é essencial para que o index.html possa carregar o voices.js.
+    Serve arquivos estáticos como CSS, JavaScript e imagens.
+    Esses arquivos devem estar localizados na pasta 'static' na raiz do seu projeto.
+    Esta rota é essencial para que o index.html possa carregar o voices.js.
     """
-    # O Render.com geralmente é capaz de servir arquivos estáticos se a pasta 'static'
-    # estiver na raiz do projeto que você está deployando.
     return send_from_directory('static', filename)
 
 
 @app.route('/generate-narration', methods=['POST'])
 def generate_narration():
     """
-    Endpoint que recebe as requisições do frontend (POST) contendo o texto a ser narrado
-    e o ID do locutor selecionado.
-    Em seguida, chama a API do Gemini Text-to-Speech e retorna o áudio gerado.
+    Endpoint para receber requisições POST do frontend.
+    Recebe: texto a ser narrado e o ID do locutor.
+    Processa: Chama a API do Gemini Text-to-Speech.
+    Retorna: O áudio gerado em formato base64.
     """
     data = request.get_json()
     text_to_speak = data.get('text')
-    voice_id = data.get('voiceId') # Recebe o ID do locutor selecionado pelo usuário
+    voice_id = data.get('voiceId') # Recebe o ID do locutor selecionado (ex: 'aoede', 'achird').
 
-    # Validação básica dos dados recebidos.
+    # Validações básicas para garantir que os dados necessários foram enviados.
     if not text_to_speak or not voice_id:
         return jsonify({"error": "Texto e ID do locutor são obrigatórios."}), 400
 
-    # Verifica se a chave da API foi carregada corretamente.
+    # Verifica novamente se a chave da API está disponível.
     if not api_key:
-        # Se api_key for None ou vazio, significa que GEMINI_API_KEY não foi configurada.
         return jsonify({"error": "Chave da API do Gemini não configurada."}), 500
 
     try:
-        # Cria o objeto de voz com o ID fornecido.
-        # É crucial que o voice_id (ex: 'aoede', 'achird') corresponda a um nome de voz
-        # suportado pela API do Gemini TTS.
-        voice_selection = genai.Voice(name=voice_id)
+        # --- Especificação da Voz para o Gemini TTS ---
+        # A forma de especificar a voz mudou. Agora usamos genai.tts.VoiceConfig.
+        # O 'name' deve corresponder a um ID de voz válido.
+        voice_config = genai.tts.VoiceConfig(name=voice_id)
 
-        # Chama a API do Gemini para gerar o áudio a partir do texto e da voz selecionada.
+        # Chama o modelo Gemini para gerar o conteúdo de áudio.
         response = genai.generate_content(
             model=model_name,
             contents=[
                 genai.Candidate(
                     content=genai.Part(
                         text=text_to_speak,
-                        voice=voice_selection
+                        # Especifica a configuração de TTS, incluindo a voz selecionada.
+                        tts_config=genai.TtsConfig(voice=voice_config)
                     )
                 )
             ]
         )
 
-        # A resposta da API contém o áudio em formato de bytes.
-        # Precisamos converter esses bytes para uma string base64 para enviá-la
-        # facilmente através de uma resposta JSON e manipulá-la no JavaScript do frontend.
+        # Extrai os dados de áudio da resposta.
+        # A API do Gemini TTS retorna o áudio em formato WAV.
         audio_content = response.candidates[0].content.audio.get_wav_data()
+
+        # Codifica o conteúdo de áudio em base64 para facilitar a transmissão via JSON.
         audio_base64 = base64.b64encode(audio_content).decode('utf-8')
 
-        # Retorna o áudio em base64 e um status de sucesso.
+        # Retorna o áudio codificado em base64 junto com um status de sucesso.
         return jsonify({"audioContent": audio_base64})
 
+    except AttributeError as ae:
+        # Captura especificamente o erro quando um atributo esperado não é encontrado.
+        # Isso é comum se a versão da SDK for antiga ou se a API foi atualizada.
+        print(f"ERRO DE ATRIBUTO: {ae}")
+        print("Possível causa: Versão desatualizada da biblioteca 'google-generativeai' ou mudança na API.")
+        print("Tente atualizar a biblioteca com: pip install --upgrade google-generativeai")
+        return jsonify({"error": f"Erro interno do servidor: Atributo não encontrado no módulo Gemini ({ae})."}), 500
     except Exception as e:
-        # Captura qualquer exceção que possa ocorrer durante a chamada à API do Gemini
-        # ou durante o processamento da resposta.
-        print(f"ERRO ao gerar narração: {e}") # Log do erro detalhado no console do servidor.
-        # Retorna uma mensagem de erro genérica para o usuário no frontend.
+        # Captura quaisquer outros erros inesperados que possam ocorrer.
+        print(f"ERRO GERAL ao gerar narração: {e}")
+        # Retorna uma mensagem de erro genérica para o frontend.
         return jsonify({"error": f"Ocorreu um erro ao gerar a narração: {e}"}), 500
 
 # --- Bloco Principal para Execução Local ---
 if __name__ == '__main__':
-    # Este bloco é executado apenas quando você roda o script Python diretamente
-    # (ex: `python app.py`).
-    # Ele não é usado pelo Render.com, que gerencia o servidor WSGI (como Gunicorn)
-    # separadamente com base nos comandos de build e start configurados.
+    # Este bloco é executado apenas quando você roda o script Python diretamente (`python app.py`).
+    # Ele NÃO é usado pelo Render.com, que utiliza um servidor WSGI (como Gunicorn).
 
-    # Para rodar localmente e testar:
-    # 1. Certifique-se de que você tem um arquivo `.env` na mesma pasta do `app.py`
-    #    contendo a sua chave: `GEMINI_API_KEY=SUA_CHAVE_SECRETA_AQUI`.
-    # 2. Crie a estrutura de pastas: `templates/` e `static/js/`.
-    # 3. Coloque o `index.html` dentro de `templates/`.
-    # 4. Coloque o `voices.js` dentro de `static/js/`.
-    # 5. Execute o script: `python app.py`
+    # Para rodar localmente:
+    # 1. Certifique-se de ter um arquivo `.env` com `GEMINI_API_KEY=SUA_CHAVE_SECRETA`.
+    # 2. Crie as pastas `templates/` e `static/js/`.
+    # 3. Coloque `index.html` em `templates/` e `voices.js` em `static/js/`.
+    # 4. Execute `python app.py`.
+    # A aplicação estará disponível em http://127.0.0.1:5000/
 
     # Executa o servidor Flask localmente.
-    # `debug=False` é recomendado para produção. Para desenvolvimento, você pode usar `debug=True`.
-    # `port=5000` é uma porta comum para aplicações Flask locais.
+    # `debug=False` é recomendado para produção. Use `debug=True` para desenvolvimento.
     app.run(debug=False, port=5000)
