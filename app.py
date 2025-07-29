@@ -2,24 +2,25 @@ import os
 import base64
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_cors import CORS
-# A biblioteca 'requests' é usada para fazer a chamada direta à API.
+# Usamos a biblioteca 'requests' para fazer a chamada HTTP direta para a API do Google.
 import requests
 from dotenv import load_dotenv
 
-# Carrega as variáveis de ambiente do arquivo .env (para testes locais)
+# Carrega as variáveis de ambiente de um arquivo .env (útil para rodar localmente).
 load_dotenv()
 
 app = Flask(__name__)
 
-# --- Configuração CORS ---
-# Permite requisições de outras origens.
+# Configura o CORS para permitir que seu frontend (hospedado em outro lugar)
+# possa fazer requisições para este backend.
 CORS(app)
 
 # --- Configuração da API ---
-# Obtém a chave da API das variáveis de ambiente.
+# Pega a chave da API das variáveis de ambiente da plataforma (Render).
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
-    # Lança um erro e impede a aplicação de iniciar se a chave não for encontrada.
+    # Se a chave não for encontrada, a aplicação não pode funcionar.
+    # Lançamos um erro para interromper a execução imediatamente.
     raise ValueError("ERRO CRÍTICO: A chave da API do Gemini (GEMINI_API_KEY) não está definida nas variáveis de ambiente.")
 
 # --- Rotas da Aplicação ---
@@ -27,14 +28,14 @@ if not api_key:
 @app.route('/')
 def index():
     """
-    Renderiza a página principal (index.html).
+    Renderiza a página principal (o arquivo 'templates/index.html').
     """
     return render_template('index.html')
 
 @app.route('/static/<path:filename>')
 def static_files(filename):
     """
-    Serve os arquivos estáticos (como CSS e o voices.js) da pasta 'static'.
+    Serve os arquivos estáticos (CSS, JavaScript) da pasta 'static'.
     """
     return send_from_directory('static', filename)
 
@@ -42,71 +43,71 @@ def static_files(filename):
 @app.route('/generate-narration', methods=['POST'])
 def generate_narration():
     """
-    Endpoint para receber o texto e o ID da voz, chamar a API do Google
-    diretamente via HTTP e retornar o áudio gerado.
+    Endpoint principal que gera a narração.
+    Recebe um JSON com 'text' e 'voiceId'.
+    Retorna um JSON com o áudio em base64.
     """
     data = request.get_json()
     text_to_speak = data.get('text')
     voice_id = data.get('voiceId')
 
-    # Validação da entrada
+    # Validação para garantir que os dados necessários foram enviados.
     if not text_to_speak or not voice_id:
         return jsonify({"error": "Texto e ID do locutor são obrigatórios."}), 400
 
-    # --- CHAMADA DIRETA À API REST DE TEXT-TO-SPEECH ---
-    
-    # URL do endpoint da API de TTS do Google AI.
-    # Usamos um f-string para incluir a chave da API diretamente na URL.
-    tts_url = f"https://generativelanguage.googleapis.com/v1beta/text:synthesizeSpeech?key={api_key}"
+    # --- URL CORRETA DA API DE TEXT-TO-SPEECH ---
+    # O endpoint correto especifica o modelo a ser usado (tts-004).
+    tts_url = f"https://generativelanguage.googleapis.com/v1beta/models/tts-004:synthesizeSpeech?key={api_key}"
 
-    # Corpo da requisição (payload ) no formato JSON que a API espera.
+    # O corpo (payload ) da requisição, formatado como a API do Google espera.
     payload = {
         "text": text_to_speak,
         "voice": {
             "name": voice_id
         },
         "audioConfig": {
-            # 'LINEAR16' é o formato para áudio WAV não comprimido.
-            "audioEncoding": "LINEAR16" 
+            "audioEncoding": "LINEAR16"  # Formato para áudio WAV.
         }
     }
 
     try:
-        # Faz a requisição POST para a API do Google com o payload JSON.
+        # Executa a chamada POST para a API do Google.
         response = requests.post(tts_url, json=payload)
 
-        # Lança uma exceção para respostas de erro (status 4xx ou 5xx).
-        # Isso ajuda a capturar problemas como chave de API inválida, voz não encontrada, etc.
+        # Verifica se a resposta da API indica um erro (ex: 400, 403, 404, 500).
+        # Se houver erro, o programa pulará para o bloco 'except'.
         response.raise_for_status()
 
-        # Converte a resposta JSON da API em um dicionário Python.
+        # Se a chamada foi bem-sucedida, extrai os dados da resposta JSON.
         response_data = response.json()
-        
-        # Extrai o conteúdo de áudio, que vem codificado em base64.
         audio_base64 = response_data.get('audioContent')
 
         if not audio_base64:
-            # Caso a resposta seja bem-sucedida mas não contenha o áudio.
+            # Segurança extra: caso a API retorne sucesso mas sem o conteúdo de áudio.
             return jsonify({"error": "A resposta da API não continha conteúdo de áudio."}), 500
 
         # Retorna o áudio em base64 para o frontend.
         return jsonify({"audioContent": audio_base64})
 
     except requests.exceptions.HTTPError as http_err:
-        # Captura erros específicos da API e mostra uma mensagem mais clara.
+        # Bloco para tratar erros específicos da API (HTTP 4xx, 5xx ).
         print(f"Erro HTTP da API: {http_err}" )
         print(f"Resposta da API: {response.text}")
-        # Tenta retornar a mensagem de erro específica da API do Google para o frontend.
-        error_message = f"Erro na API do Google: {response.json().get('error', {}).get('message', 'Erro desconhecido')}"
-        return jsonify({"error": error_message}), response.status_code
+        try:
+            # Tenta extrair a mensagem de erro específica do JSON da API.
+            error_message = f"Erro na API do Google: {response.json().get('error', {}).get('message', 'Erro desconhecido')}"
+            return jsonify({"error": error_message}), response.status_code
+        except requests.exceptions.JSONDecodeError:
+            # Se a resposta de erro não for um JSON, retorna o texto bruto.
+            return jsonify({"error": f"Erro na API do Google: {response.text}"}), response.status_code
     
     except Exception as e:
-        # Captura quaisquer outros erros (ex: problemas de rede).
+        # Bloco para capturar qualquer outro erro inesperado (ex: falha de rede).
         print(f"ERRO GERAL ao gerar narração: {e}")
         return jsonify({"error": f"Ocorreu um erro inesperado no servidor: {e}"}), 500
 
 # --- Bloco Principal para Execução Local ---
 if __name__ == '__main__':
-    # Este bloco só é executado quando você roda 'python app.py' localmente.
-    # O Gunicorn no Render não executa esta parte.
+    # Este bloco permite rodar a aplicação localmente com o comando 'python app.py'.
+    # Não é usado pelo Gunicorn no ambiente de produção (Render).
     app.run(debug=True, port=5000)
