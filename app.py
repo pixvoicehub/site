@@ -1,3 +1,4 @@
+# VERSÃO FINAL - 02 DE AGOSTO - CORREÇÃO DA API
 import os
 import base64
 from flask import Flask, request, jsonify
