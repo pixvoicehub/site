@@ -33,7 +33,8 @@
             <select id="voiceSelector">
                 <option value="">-- Selecione um locutor --</option>
                 {% for voice in voices %}
-                    <option value="{{ voice.id }}">{{ voice.name }} ({{ voice.gender == 'F' ? 'Feminino' : 'Masculino' }} - {{ voice.specialty }})</option>
+                    {# Agora usando o display_text formatado previamente no backend #}
+                    <option value="{{ voice.id }}">{{ voice.display_text }}</option>
                 {% endfor %}
             </select>
         </div>
@@ -53,6 +54,12 @@
         const loadingIndicator = document.getElementById('loading');
         const audioPlayerContainer = document.getElementById('audioPlayerContainer');
 
+        // --- Ajuste aqui se estiver usando Hostinger para HTML ---
+        // Se a sua aplicação Flask/Render estiver em um subdiretório ou precisar de um prefixo
+        // Por exemplo, se o seu Render URL for https://meusite.onrender.com/api/
+        // const backendUrl = '/api'; // Exemplo para rota relativa se ambos estiverem no mesmo domínio
+        const backendUrl = 'https://site-z95m.onrender.com'; // Seu URL do Render para a chamada AJAX
+
         generateButton.addEventListener('click', async () => {
             const text = textInput.value.trim();
             const voiceId = voiceSelector.value;
@@ -71,7 +78,8 @@
             audioPlayerContainer.innerHTML = ''; // Limpa o player anterior
 
             try {
-                const response = await fetch('/generate-narration', {
+                // Ajuste a URL aqui caso necessário
+                const response = await fetch(`${backendUrl}/generate-narration`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
