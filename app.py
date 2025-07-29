@@ -1,17 +1,15 @@
-
-```python
 # app.py - VERSÃO FINAL COM CONVERSÃO PARA MP3
 import os
 import base64
 import mimetypes
 import struct
-import io  # Necessário para manipulação de arquivos em memória
+import io
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
-from pydub import AudioSegment # Importa a biblioteca pydub
+from pydub import AudioSegment
 
 # --- Configuração Inicial ---
 load_dotenv()
@@ -22,10 +20,9 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     raise ValueError("ERRO CRÍTICO: A chave da API do Gemini (GEMINI_API_KEY) não está definida.")
 
-# --- Funções de Suporte (do código oficial) ---
+# --- Funções de Suporte ---
 
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
-    """Gera um cabeçalho WAV para os dados de áudio fornecidos."""
     parameters = parse_audio_mime_type(mime_type)
     bits_per_sample = parameters.get("bits_per_sample", 16)
     sample_rate = parameters.get("rate", 24000)
@@ -45,7 +42,6 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     return header + audio_data
 
 def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
-    """Extrai bits por amostra e taxa de um tipo MIME de áudio."""
     rate = 24000
     bits_per_sample = 16
     if mime_type:
@@ -54,7 +50,7 @@ def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
             param = param.strip()
             if param.lower().startswith("rate="):
                 try:
-                    rate = int(param.split("=", 1)[1])
+                    rate = int(param.split("=", 1))
                 except (ValueError, IndexError):
                     pass
     return {"bits_per_sample": bits_per_sample, "rate": rate}
@@ -92,8 +88,8 @@ def generate_narration():
         for chunk in client.models.generate_content_stream(
             model=model, contents=contents, config=generate_content_config
         ):
-            if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                part = chunk.candidates[0].content.parts[0]
+            if chunk.candidates and chunk.candidates.content and chunk.candidates.content.parts:
+                part = chunk.candidates.content.parts
                 if part.inline_data and part.inline_data.data:
                     full_audio_data.extend(part.inline_data.data)
                     if part.inline_data.mime_type:
@@ -102,20 +98,15 @@ def generate_narration():
         if not full_audio_data:
             return jsonify({"error": "A API não retornou dados de áudio."}), 500
 
-        # 1. Converte os dados brutos para o formato WAV em memória
         wav_data = convert_to_wav(bytes(full_audio_data), audio_mime_type)
         
-        # 2. Carrega o áudio WAV em um objeto pydub
-        #    Usamos io.BytesIO para tratar os dados em bytes como um arquivo em memória
         wav_file_in_memory = io.BytesIO(wav_data)
         audio = AudioSegment.from_file(wav_file_in_memory, format="wav")
 
-        # 3. Exporta o áudio para o formato MP3 em memória
         mp3_file_in_memory = io.BytesIO()
         audio.export(mp3_file_in_memory, format="mp3")
         mp3_data = mp3_file_in_memory.getvalue()
         
-        # 4. Codifica os dados MP3 em base64 para enviar ao frontend
         audio_base64 = base64.b64encode(mp3_data).decode('utf-8')
 
         return jsonify({"audioContent": audio_base64})
