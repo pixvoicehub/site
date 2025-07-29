@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gerador de Narração com Gemini</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}"> <!-- Opcional: link para CSS -->
+    <!-- Link para CSS (se tiver) -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
         /* Estilos básicos para demonstração */
         body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; }
@@ -30,12 +31,9 @@
 
         <div>
             <label for="voiceSelector">Escolha um locutor:</label>
+            {# O select estará vazio inicialmente, será populado pelo JS #}
             <select id="voiceSelector">
                 <option value="">-- Selecione um locutor --</option>
-                {% for voice in voices %}
-                    {# Agora usando o display_text formatado previamente no backend #}
-                    <option value="{{ voice.id }}">{{ voice.display_text }}</option>
-                {% endfor %}
             </select>
         </div>
 
@@ -47,18 +45,25 @@
         </div>
     </div>
 
+    <!-- Carrega o arquivo JavaScript com os dados das vozes -->
+    <!-- Certifique-se que o caminho está correto na Hostinger -->
+    <script src="static/js/voices.js"></script>
+
     <script>
+        // Aguarda o DOM estar completamente carregado para garantir que o select existe
+        document.addEventListener('DOMContentLoaded', () => {
+            // Popula o select com as vozes quando a página carrega
+            populateVoiceSelector('voiceSelector');
+        });
+
         const textInput = document.getElementById('textInput');
         const voiceSelector = document.getElementById('voiceSelector');
         const generateButton = document.getElementById('generateButton');
         const loadingIndicator = document.getElementById('loading');
         const audioPlayerContainer = document.getElementById('audioPlayerContainer');
 
-        // --- Ajuste aqui se estiver usando Hostinger para HTML ---
-        // Se a sua aplicação Flask/Render estiver em um subdiretório ou precisar de um prefixo
-        // Por exemplo, se o seu Render URL for https://meusite.onrender.com/api/
-        // const backendUrl = '/api'; // Exemplo para rota relativa se ambos estiverem no mesmo domínio
-        const backendUrl = 'https://site-z95m.onrender.com'; // Seu URL do Render para a chamada AJAX
+        // URL base da sua aplicação backend no Render
+        const backendUrl = 'https://site-z95m.onrender.com';
 
         generateButton.addEventListener('click', async () => {
             const text = textInput.value.trim();
@@ -78,7 +83,6 @@
             audioPlayerContainer.innerHTML = ''; // Limpa o player anterior
 
             try {
-                // Ajuste a URL aqui caso necessário
                 const response = await fetch(`${backendUrl}/generate-narration`, {
                     method: 'POST',
                     headers: {
@@ -99,7 +103,6 @@
                     audioElement.src = audioUrl;
                     audioPlayerContainer.appendChild(audioElement);
 
-                    // Limpa a URL de objeto após a reprodução ou se o elemento for removido
                     audioElement.onended = () => URL.revokeObjectURL(audioUrl);
                     audioElement.onerror = () => URL.revokeObjectURL(audioUrl);
 
