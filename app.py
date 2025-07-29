@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL COM CONVERSÃO PARA WAV
+# app.py - VERSÃO FINAL COM CONVERSÃO PARA MP3
 import os
 import base64
 import mimetypes
@@ -9,6 +9,10 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 
+# Novas importações para a conversão MP3
+from pydub import AudioSegment
+import io
+
 # --- Configuração Inicial ---
 load_dotenv()
 app = Flask(__name__)
@@ -18,7 +22,7 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     raise ValueError("ERRO CRÍTICO: A chave da API do Gemini (GEMINI_API_KEY) não está definida.")
 
-# --- Funções de Suporte (do código oficial, agora serão usadas) ---
+# --- Funções de Suporte (do código oficial) ---
 
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     """Gera um cabeçalho WAV para os dados de áudio fornecidos."""
@@ -42,10 +46,8 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 
 def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
     """Extrai bits por amostra e taxa de um tipo MIME de áudio."""
-    # Exemplo de mime_type retornado pela API: "audio/L16;rate=24000"
-    rate = 24000 # Valor padrão
-    bits_per_sample = 16 # Valor padrão
-
+    rate = 24000
+    bits_per_sample = 16
     parts = mime_type.split(";")
     for param in parts:
         param = param.strip()
@@ -54,7 +56,6 @@ def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
                 rate = int(param.split("=", 1)[1])
             except (ValueError, IndexError):
                 pass
-    # O formato L16 significa 16 bits por amostra.
     if "audio/L16" in mime_type:
         bits_per_sample = 16
     
@@ -88,7 +89,7 @@ def generate_narration():
         )
 
         full_audio_data = bytearray()
-        audio_mime_type = "audio/L16;rate=24000" # Mime type padrão
+        audio_mime_type = "audio/L16;rate=24000"
 
         for chunk in client.models.generate_content_stream(
             model=model, contents=contents, config=generate_content_config
@@ -97,26 +98,38 @@ def generate_narration():
                 part = chunk.candidates[0].content.parts[0]
                 if part.inline_data and part.inline_data.data:
                     full_audio_data.extend(part.inline_data.data)
-                    # Captura o mime_type do primeiro chunk que o tiver
                     if part.inline_data.mime_type:
                         audio_mime_type = part.inline_data.mime_type
 
         if not full_audio_data:
             return jsonify({"error": "A API não retornou dados de áudio."}), 500
 
-        # --- CONVERSÃO PARA WAV APLICADA AQUI ---
-        # Pega os dados brutos e o mime_type e converte para um arquivo WAV completo.
+        # 1. Converte os dados brutos para o formato WAV em memória
         wav_data = convert_to_wav(bytes(full_audio_data), audio_mime_type)
         
-        # Codifica o áudio WAV completo em base64 para enviar ao frontend.
-        audio_base64 = base64.b64encode(wav_data).decode('utf-8')
+        # 2. Carrega os dados WAV no pydub a partir de um buffer de memória
+        wav_file_like = io.BytesIO(wav_data)
+        audio_segment = AudioSegment.from_file(wav_file_like, format="wav")
 
-        return jsonify({"audioContent": audio_base64})
+        # 3. Exporta o áudio como MP3 para um novo buffer de memória
+        mp3_file_like = io.BytesIO()
+        audio_segment.export(mp3_file_like, format="mp3")
+        mp3_data = mp3_file_like.getvalue()
+        
+        # 4. Codifica os dados MP3 em base64 para enviar ao frontend
+        audio_baseCom certeza! Excelente ideia. O formato MP3 é muito mais eficiente para a web, resultando em arquivos menores e carregamento mais rápido para o usuário.
 
-    except Exception as e:
-        print(f"ERRO ao gerar narração com o SDK: {e}")
-        return jsonify({"error": f"Ocorreu um erro no servidor ao gerar a narração. Detalhe: {e}"}), 500
+Para fazer a conversão de WAV para MP3 no backend, precisaremos de uma biblioteca de manipulação de áudio. A mais popular e robusta para Python é a **`pydub`**. Ela é fácil de usar e se integra bem com o Flask.
 
-# --- Bloco de Execução Local ---
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+O processo será o seguinte:
+1.  Receber os dados de áudio brutos do Gemini.
+2.  Construir o arquivo WAV em memória (como fizemos antes).
+3.  Usar a `pydub` para carregar este áudio WAV.
+4.  Exportar o áudio como MP3, também em memória.
+5.  Codificar o resultado MP3 em base64 e enviar para o frontend.
+
+### Passo 1: Adicionar a Biblioteca `pydub`
+
+Primeiro, você precisa adicionar a `pydub` ao seu arquivo `requirements.txt`.
+
+**`requirements.txt` (Atualizado):**
