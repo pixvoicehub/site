@@ -1,7 +1,6 @@
-# app.py - VERSÃO FINAL COM TRATAMENTO DE ERRO APRIMORADO
+# app.py - VERSÃO FINAL COM CORREÇÃO DO 'configure'
 import os
 import base64
-import mimetypes
 import struct
 import io
 from flask import Flask, request, jsonify
@@ -53,7 +52,15 @@ def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
                     pass
     return {"bits_per_sample": bits_per_sample, "rate": rate}
 
-# --- Rota Principal da API ---
+# --- Rotas da API ---
+@app.route('/')
+def home():
+    return "Serviço de Narração está online."
+
+@app.route('/health')
+def health_check():
+    return "API de Narração está saudável.", 200
+
 @app.route('/generate-narration', methods=['POST'])
 def generate_narration():
     data = request.get_json()
@@ -67,7 +74,9 @@ def generate_narration():
         return jsonify({"error": "Os campos 'text' e 'voiceId' são obrigatórios."}), 400
 
     try:
-        genai.configure(api_key=API_KEY)
+        # [CORREÇÃO] A linha 'genai.configure(api_key=API_KEY)' foi REMOVIDA.
+        # A chave da API é passada diretamente ao criar o cliente.
+        client = genai.Client(api_key=API_KEY)
         model = genai.GenerativeModel("gemini-2.5-pro-preview-tts")
         
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=text_to_speak)])]
@@ -84,7 +93,6 @@ def generate_narration():
         full_audio_data = bytearray()
         audio_mime_type = "audio/L16;rate=24000"
 
-        # [NOVO] Bloco try/except específico para a chamada da API Gemini
         try:
             stream = model.generate_content(contents=contents, generation_config=generation_config, stream=True)
             for chunk in stream:
@@ -95,10 +103,9 @@ def generate_narration():
                         if part.inline_data.mime_type:
                             audio_mime_type = part.inline_data.mime_type
         except Exception as api_error:
-            # Se a API do Gemini falhar, retorna uma mensagem de erro clara.
             error_message = f"A API do Gemini retornou um erro: {api_error}"
             print(f"ERRO NA API GEMINI: {error_message}")
-            return jsonify({"error": error_message}), 422 # 422: Unprocessable Entity
+            return jsonify({"error": error_message}), 422
 
         if not full_audio_data:
             return jsonify({"error": "A API não retornou dados de áudio válidos."}), 500
@@ -117,7 +124,6 @@ def generate_narration():
         return jsonify({"audioContent": audio_base64})
 
     except Exception as e:
-        # Captura qualquer outro erro inesperado (ex: na conversão de áudio).
         print(f"ERRO INESPERADO NO SERVIDOR: {e}")
         return jsonify({"error": f"Ocorreu um erro interno no servidor Python. Detalhe: {e}"}), 500
 
