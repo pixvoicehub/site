@@ -76,7 +76,7 @@ def generate_narration():
     try:
         client = genai.Client(api_key=API_KEY)
         
-        # [CORREÇÃO] O nome do modelo é passado diretamente na chamada de streaming.
+        # [CORREÇÃO] O nome do modelo é definido como uma string.
         model_name = "gemini-2.5-pro-preview-tts"
         
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=text_to_speak)])]
@@ -94,7 +94,7 @@ def generate_narration():
         audio_mime_type = "audio/L16;rate=24000"
 
         try:
-            # [CORREÇÃO] Usamos 'client.models.generate_content_stream' em vez de 'model.generate_content'.
+            # [CORREÇÃO] Usamos 'client.models.generate_content_stream' em vez de 'genai.GenerativeModel'.
             stream = client.models.generate_content_stream(
                 model=model_name, 
                 contents=contents, 
@@ -134,4 +134,12 @@ def generate_narration():
 
 # --- Bloco de Execução Local ---
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000)```
+
+### Próximos Passos
+
+1.  **Substitua o `app.py`** no repositório do seu serviço de narração por este código corrigido.
+2.  **Faça o deploy** da alteração no Render.
+3.  **Não é necessário alterar o arquivo PHP.** A correção no Python resolverá o problema em cascata.
+
+Após o deploy, o erro `has no attribute 'GenerativeModel'` será resolvido, o seu `app.py` retornará uma resposta de sucesso (código 200), e o seu `generate_audio_api.php` não vai mais gerar o `Warning`, resultando em um JSON limpo e válido para o frontend.
