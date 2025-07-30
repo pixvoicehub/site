@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL COM CORREÇÃO DO ATRIBUTO 'content'
+# app.py - VERSÃO FINAL COM TRATAMENTO DE ERRO APRIMORADO
 import os
 import base64
 import mimetypes
@@ -20,8 +20,7 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     raise ValueError("ERRO CRÍTICO: A chave da API do Gemini (GEMINI_API_KEY) não está definida.")
 
-# --- Funções de Suporte ---
-
+# --- Funções de Suporte (sem alterações) ---
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     parameters = parse_audio_mime_type(mime_type)
     bits_per_sample = parameters.get("bits_per_sample", 16)
@@ -32,7 +31,6 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     block_align = num_channels * bytes_per_sample
     byte_rate = sample_rate * block_align
     chunk_size = 36 + data_size
-
     header = struct.pack(
         "<4sI4s4sIHHIIHH4sI",
         b"RIFF", chunk_size, b"WAVE", b"fmt ", 16, 1, num_channels,
@@ -56,24 +54,25 @@ def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
     return {"bits_per_sample": bits_per_sample, "rate": rate}
 
 # --- Rota Principal da API ---
-
 @app.route('/generate-narration', methods=['POST'])
 def generate_narration():
     data = request.get_json()
+    if not data:
+        return jsonify({"error": "Requisição JSON inválida."}), 400
+
     text_to_speak = data.get('text')
     voice_id = data.get('voiceId')
 
     if not text_to_speak or not voice_id:
-        return jsonify({"error": "Texto e ID do locutor são obrigatórios."}), 400
+        return jsonify({"error": "Os campos 'text' e 'voiceId' são obrigatórios."}), 400
 
     try:
-        client = genai.Client(api_key=API_KEY)
-        model = "gemini-2.5-pro-preview-tts"
+        genai.configure(api_key=API_KEY)
+        model = genai.GenerativeModel("gemini-2.5-pro-preview-tts")
         
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=text_to_speak)])]
         
-        generate_content_config = types.GenerateContentConfig(
-            temperature=1,
+        generation_config = types.GenerateContentConfig(
             response_modalities=["audio"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
@@ -85,19 +84,24 @@ def generate_narration():
         full_audio_data = bytearray()
         audio_mime_type = "audio/L16;rate=24000"
 
-        for chunk in client.models.generate_content_stream(
-            model=model, contents=contents, config=generate_content_config
-        ):
-            # A CORREÇÃO ESTÁ NA LINHA ABAIXO
-            if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                part = chunk.candidates[0].content.parts[0] # Acessando o primeiro candidato e a primeira parte
-                if part.inline_data and part.inline_data.data:
-                    full_audio_data.extend(part.inline_data.data)
-                    if part.inline_data.mime_type:
-                        audio_mime_type = part.inline_data.mime_type
+        # [NOVO] Bloco try/except específico para a chamada da API Gemini
+        try:
+            stream = model.generate_content(contents=contents, generation_config=generation_config, stream=True)
+            for chunk in stream:
+                if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
+                    part = chunk.candidates[0].content.parts[0]
+                    if part.inline_data and part.inline_data.data:
+                        full_audio_data.extend(part.inline_data.data)
+                        if part.inline_data.mime_type:
+                            audio_mime_type = part.inline_data.mime_type
+        except Exception as api_error:
+            # Se a API do Gemini falhar, retorna uma mensagem de erro clara.
+            error_message = f"A API do Gemini retornou um erro: {api_error}"
+            print(f"ERRO NA API GEMINI: {error_message}")
+            return jsonify({"error": error_message}), 422 # 422: Unprocessable Entity
 
         if not full_audio_data:
-            return jsonify({"error": "A API não retornou dados de áudio."}), 500
+            return jsonify({"error": "A API não retornou dados de áudio válidos."}), 500
 
         wav_data = convert_to_wav(bytes(full_audio_data), audio_mime_type)
         
@@ -113,8 +117,9 @@ def generate_narration():
         return jsonify({"audioContent": audio_base64})
 
     except Exception as e:
-        print(f"ERRO ao gerar narração com o SDK: {e}")
-        return jsonify({"error": f"Ocorreu um erro no servidor ao gerar a narração. Detalhe: {e}"}), 500
+        # Captura qualquer outro erro inesperado (ex: na conversão de áudio).
+        print(f"ERRO INESPERADO NO SERVIDOR: {e}")
+        return jsonify({"error": f"Ocorreu um erro interno no servidor Python. Detalhe: {e}"}), 500
 
 # --- Bloco de Execução Local ---
 if __name__ == '__main__':
