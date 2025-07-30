@@ -19,7 +19,7 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     raise ValueError("ERRO CRÍTICO: A chave da API do Gemini (GEMINI_API_KEY) não está definida.")
 
-# --- Funções de Suporte (sem alterações) ---
+# --- Funções de Suporte ---
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     parameters = parse_audio_mime_type(mime_type)
     bits_per_sample = parameters.get("bits_per_sample", 16)
@@ -47,7 +47,7 @@ def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
             param = param.strip()
             if param.lower().startswith("rate="):
                 try:
-                    rate = int(param.split("=", 1)[1])
+                    rate = int(param.split("=", 1))
                 except (ValueError, IndexError):
                     pass
     return {"bits_per_sample": bits_per_sample, "rate": rate}
@@ -76,7 +76,6 @@ def generate_narration():
     try:
         client = genai.Client(api_key=API_KEY)
         
-        # [CORREÇÃO] O nome do modelo é definido como uma string.
         model_name = "gemini-2.5-pro-preview-tts"
         
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=text_to_speak)])]
@@ -94,15 +93,14 @@ def generate_narration():
         audio_mime_type = "audio/L16;rate=24000"
 
         try:
-            # [CORREÇÃO] Usamos 'client.models.generate_content_stream' em vez de 'genai.GenerativeModel'.
             stream = client.models.generate_content_stream(
                 model=model_name, 
                 contents=contents, 
                 config=generation_config
             )
             for chunk in stream:
-                if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                    part = chunk.candidates[0].content.parts[0]
+                if chunk.candidates and chunk.candidates.content and chunk.candidates.content.parts:
+                    part = chunk.candidates.content.parts
                     if part.inline_data and part.inline_data.data:
                         full_audio_data.extend(part.inline_data.data)
                         if part.inline_data.mime_type:
@@ -134,12 +132,4 @@ def generate_narration():
 
 # --- Bloco de Execução Local ---
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)```
-
-### Próximos Passos
-
-1.  **Substitua o `app.py`** no repositório do seu serviço de narração por este código corrigido.
-2.  **Faça o deploy** da alteração no Render.
-3.  **Não é necessário alterar o arquivo PHP.** A correção no Python resolverá o problema em cascata.
-
-Após o deploy, o erro `has no attribute 'GenerativeModel'` será resolvido, o seu `app.py` retornará uma resposta de sucesso (código 200), e o seu `generate_audio_api.php` não vai mais gerar o `Warning`, resultando em um JSON limpo e válido para o frontend.
+    app.run(debug=True, port=5000)
