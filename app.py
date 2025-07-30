@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL COM CORREÇÃO DO 'configure'
+# app.py - VERSÃO FINAL COM CORREÇÃO DO MÉTODO DE CHAMADA DO MODELO
 import os
 import base64
 import struct
@@ -74,10 +74,10 @@ def generate_narration():
         return jsonify({"error": "Os campos 'text' e 'voiceId' são obrigatórios."}), 400
 
     try:
-        # [CORREÇÃO] A linha 'genai.configure(api_key=API_KEY)' foi REMOVIDA.
-        # A chave da API é passada diretamente ao criar o cliente.
         client = genai.Client(api_key=API_KEY)
-        model = genai.GenerativeModel("gemini-2.5-pro-preview-tts")
+        
+        # [CORREÇÃO] O nome do modelo é passado diretamente na chamada de streaming.
+        model_name = "gemini-2.5-pro-preview-tts"
         
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=text_to_speak)])]
         
@@ -94,7 +94,12 @@ def generate_narration():
         audio_mime_type = "audio/L16;rate=24000"
 
         try:
-            stream = model.generate_content(contents=contents, generation_config=generation_config, stream=True)
+            # [CORREÇÃO] Usamos 'client.models.generate_content_stream' em vez de 'model.generate_content'.
+            stream = client.models.generate_content_stream(
+                model=model_name, 
+                contents=contents, 
+                config=generation_config
+            )
             for chunk in stream:
                 if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
                     part = chunk.candidates[0].content.parts[0]
