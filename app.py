@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL COM EXPORTAÇÃO DE MP3 EM ALTA QUALIDADE
+# app.py - VERSÃO FINAL COM EXPORTAÇÃO DE MP3 EM QUALIDADE MÁXIMA (320k)
 import os
 import base64
 import struct
@@ -120,8 +120,8 @@ def generate_narration():
         mp3_file_in_memory = io.BytesIO()
         
         # [A CORREÇÃO ESTÁ AQUI]
-        # Exportamos o MP3 com um bitrate de 192k, que é um padrão de alta qualidade.
-        audio.export(mp3_file_in_memory, format="mp3", bitrate="192k")
+        # Exportamos o MP3 com um bitrate de 320k, que é o padrão de máxima qualidade.
+        audio.export(mp3_file_in_memory, format="mp3", bitrate="320k")
         
         mp3_data = mp3_file_in_memory.getvalue()
         
