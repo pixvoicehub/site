@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL COM CORREÇÃO DO ACESSO AO OBJETO 'candidates'
+# app.py - VERSÃO FINAL COM EXPORTAÇÃO DE MP3 EM ALTA QUALIDADE
 import os
 import base64
 import struct
@@ -98,8 +98,6 @@ def generate_narration():
                 config=generation_config
             )
             for chunk in stream:
-                # [A CORREÇÃO ESTÁ AQUI]
-                # Acessamos o primeiro candidato da lista: chunk.candidates[0]
                 if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
                     part = chunk.candidates[0].content.parts[0]
                     if part.inline_data and part.inline_data.data:
@@ -120,7 +118,11 @@ def generate_narration():
         audio = AudioSegment.from_file(wav_file_in_memory, format="wav")
 
         mp3_file_in_memory = io.BytesIO()
-        audio.export(mp3_file_in_memory, format="mp3")
+        
+        # [A CORREÇÃO ESTÁ AQUI]
+        # Exportamos o MP3 com um bitrate de 192k, que é um padrão de alta qualidade.
+        audio.export(mp3_file_in_memory, format="mp3", bitrate="192k")
+        
         mp3_data = mp3_file_in_memory.getvalue()
         
         audio_base64 = base64.b64encode(mp3_data).decode('utf-8')
