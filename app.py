@@ -1,4 +1,4 @@
-# app.py - VERSÃO COM SUPORTE A TEXTOS LONGOS (CHUNKING) E ALTA QUALIDADE
+# app.py - VERSÃO COM LIMPEZA AVANÇADA DE TEXTO (NORMALIZAÇÃO)
 import os
 import base64
 import struct
@@ -23,25 +23,37 @@ if not API_KEY:
 # --- Funções de Suporte ---
 
 def sanitize_text(text):
-    """Limpa o texto de caracteres potencialmente problemáticos."""
-    # Remove a maioria dos caracteres que não são letras, números ou pontuação comum.
-    # Mantém acentos e caracteres latinos básicos.
+    """
+    Limpa e normaliza o texto para torná-lo mais compatível com a API de TTS.
+    """
+    # Substitui o símbolo de Real e formatações de preço para texto por extenso.
+    # Ex: "R$ 249,00" -> "249 reais"
+    text = re.sub(r'R\$\s*([\d,.]+)', lambda m: m.group(1).replace('.', '').replace(',', ' e ') + ' reais', text)
+    
+    # Converte números com vírgula para "e" (ex: 8,5 -> "8 e 5")
+    text = re.sub(r'(\d),(\d)', r'\1 e \2', text)
+
+    # Substitui travessões e hífens múltiplos por uma pausa simples (vírgula).
+    text = re.sub(r'[-–—]+', ', ', text)
+    
+    # Normaliza pontuação excessiva para uma única ocorrência.
+    text = re.sub(r'(!+)', '!', text)
+    text = re.sub(r'(\?+)', '?', text)
+    
+    # Remove caracteres que não são letras, números ou pontuação comum.
+    # Mantém acentos e caracteres latinos.
     text = re.sub(r'[^\w\s.,!?-áéíóúâêîôûãõàèìòùçÁÉÍÓÚÂÊÎÔÛÃÕÀÈÌÒÙÇ]', '', text)
+    
     # Substitui múltiplos espaços/quebras de linha por um único espaço.
     text = re.sub(r'\s+', ' ', text).strip()
+    
     return text
 
 def split_text_into_chunks(text, max_length=4500):
-    """
-    Divide o texto em pedaços menores, tentando quebrar em sentenças.
-    O limite da API do Gemini 1.5 é alto, mas usamos 4500 como um limite seguro por chamada de TTS.
-    """
-    # Usa regex para encontrar finais de sentenças (., !, ?) seguidos de espaço ou fim de string.
+    """Divide o texto em pedaços menores, tentando quebrar em sentenças."""
     sentences = re.split(r'(?<=[.!?])\s+', text)
-    
     chunks = []
     current_chunk = ""
-    
     for sentence in sentences:
         if len(current_chunk) + len(sentence) + 1 < max_length:
             current_chunk += sentence + " "
@@ -49,12 +61,11 @@ def split_text_into_chunks(text, max_length=4500):
             if current_chunk:
                 chunks.append(current_chunk.strip())
             current_chunk = sentence + " "
-            
     if current_chunk:
         chunks.append(current_chunk.strip())
-        
     return chunks
 
+# ... (as funções convert_to_wav e parse_audio_mime_type permanecem inalteradas) ...
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     parameters = parse_audio_mime_type(mime_type)
     bits_per_sample = parameters.get("bits_per_sample", 16)
@@ -88,10 +99,9 @@ def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
     return {"bits_per_sample": bits_per_sample, "rate": rate}
 
 # --- Rota Principal da API ---
-
 @app.route('/')
 def home():
-    return "Serviço de Narração está online (v2.0 com suporte a textos longos)."
+    return "Serviço de Narração está online (v2.1 com normalização de texto)."
 
 @app.route('/health')
 def health_check():
@@ -110,23 +120,20 @@ def generate_narration():
         return jsonify({"error": "Os campos 'text' e 'voiceId' são obrigatórios."}), 400
 
     try:
-        # Limpa o texto antes de processar
+        # [AQUI ESTÁ A MUDANÇA IMPORTANTE]
+        # Limpa e normaliza o texto antes de qualquer outra coisa.
         clean_text = sanitize_text(text_to_speak)
         text_chunks = split_text_into_chunks(clean_text)
 
-        # Inicializa um objeto de áudio vazio com pydub
         final_audio = AudioSegment.empty()
-        
         client = genai.Client(api_key=API_KEY)
         model_name = "gemini-2.5-pro-preview-tts"
 
-        # Itera sobre cada pedaço do texto
         for chunk_text in text_chunks:
             if not chunk_text:
                 continue
 
             contents = [types.Content(role="user", parts=[types.Part.from_text(text=chunk_text)])]
-            
             generation_config = types.GenerateContentConfig(
                 response_modalities=["audio"],
                 speech_config=types.SpeechConfig(
@@ -153,24 +160,21 @@ def generate_narration():
                             if part.inline_data.mime_type:
                                 audio_mime_type = part.inline_data.mime_type
             except Exception as api_error:
-                # Se um chunk falhar, loga o erro e continua para o próximo
-                print(f"ERRO em um chunk da API GEMINI: {api_error}")
-                continue # Pula para o próximo chunk
+                error_message = f"A API do Gemini retornou um erro: {api_error}"
+                print(f"ERRO NA API GEMINI: {error_message}")
+                return jsonify({"error": error_message}), 422
 
             if not full_audio_data:
-                continue # Pula chunks que não retornaram áudio
+                continue
 
-            # Converte o áudio do chunk para um objeto pydub e o adiciona ao áudio final
             wav_data = convert_to_wav(bytes(full_audio_data), audio_mime_type)
             wav_file_in_memory = io.BytesIO(wav_data)
             audio_chunk = AudioSegment.from_file(wav_file_in_memory, format="wav")
             final_audio += audio_chunk
 
-        # Verifica se algum áudio foi gerado no final
         if len(final_audio) == 0:
             return jsonify({"error": "Não foi possível gerar áudio para o texto fornecido."}), 500
 
-        # Exporta o áudio final completo para MP3 em alta qualidade
         mp3_file_in_memory = io.BytesIO()
         final_audio.export(mp3_file_in_memory, format="mp3", bitrate="320k")
         mp3_data = mp3_file_in_memory.getvalue()
