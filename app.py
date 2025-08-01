@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL COM EXPORTAÇÃO DE MP3 EM QUALIDADE MÁXIMA (320k)
+# app.py - VERSÃO ESTÁVEL E REVISADA (Focada apenas em narração)
 import os
 import base64
 import struct
@@ -19,7 +19,7 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     raise ValueError("ERRO CRÍTICO: A chave da API do Gemini (GEMINI_API_KEY) não está definida.")
 
-# --- Funções de Suporte (sem alterações) ---
+# --- Funções de Suporte ---
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     parameters = parse_audio_mime_type(mime_type)
     bits_per_sample = parameters.get("bits_per_sample", 16)
@@ -77,6 +77,7 @@ def generate_narration():
         client = genai.Client(api_key=API_KEY)
         model_name = "gemini-2.5-pro-preview-tts"
         
+        # A API espera uma lista de conteúdos
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=text_to_speak)])]
         
         generation_config = types.GenerateContentConfig(
@@ -118,11 +119,7 @@ def generate_narration():
         audio = AudioSegment.from_file(wav_file_in_memory, format="wav")
 
         mp3_file_in_memory = io.BytesIO()
-        
-        # [A CORREÇÃO ESTÁ AQUI]
-        # Exportamos o MP3 com um bitrate de 320k, que é o padrão de máxima qualidade.
         audio.export(mp3_file_in_memory, format="mp3", bitrate="320k")
-        
         mp3_data = mp3_file_in_memory.getvalue()
         
         audio_base64 = base64.b64encode(mp3_data).decode('utf-8')
