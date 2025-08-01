@@ -1,8 +1,9 @@
-# app.py - VERSÃO ESTÁVEL E REVISADA (Focada apenas em narração)
+# app.py - VERSÃO FINAL COM CHUNKING (SUPORTE A TEXTOS LONGOS)
 import os
 import base64
 import struct
 import io
+import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from google import genai
@@ -20,6 +21,36 @@ if not API_KEY:
     raise ValueError("ERRO CRÍTICO: A chave da API do Gemini (GEMINI_API_KEY) não está definida.")
 
 # --- Funções de Suporte ---
+
+def split_text_into_chunks(text, max_length=4500):
+    """
+    Divide o texto em pedaços menores, tentando quebrar em sentenças.
+    Este é um passo crucial para evitar timeouts e erros da API com textos longos.
+    """
+    # Usa regex para encontrar finais de sentenças (., !, ?) seguidos de espaço ou fim de string.
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    
+    chunks = []
+    current_chunk = ""
+    
+    for sentence in sentences:
+        # Se adicionar a próxima sentença não exceder o limite, adiciona.
+        if len(current_chunk) + len(sentence) + 1 < max_length:
+            current_chunk += sentence + " "
+        # Se exceder...
+        else:
+            # ...envia o chunk atual se ele não estiver vazio.
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            # E começa um novo chunk com a sentença atual.
+            current_chunk = sentence + " "
+            
+    # Adiciona o último chunk que sobrou.
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+        
+    return chunks
+
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     parameters = parse_audio_mime_type(mime_type)
     bits_per_sample = parameters.get("bits_per_sample", 16)
@@ -52,10 +83,10 @@ def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
                     pass
     return {"bits_per_sample": bits_per_sample, "rate": rate}
 
-# --- Rotas da API ---
+# --- Rota Principal da API ---
 @app.route('/')
 def home():
-    return "Serviço de Narração está online."
+    return "Serviço de Narração está online (v3.0 com suporte a textos longos)."
 
 @app.route('/health')
 def health_check():
@@ -74,52 +105,69 @@ def generate_narration():
         return jsonify({"error": "Os campos 'text' e 'voiceId' são obrigatórios."}), 400
 
     try:
+        # [AQUI ESTÁ A MUDANÇA IMPORTANTE]
+        # O texto já vem limpo do PHP, agora vamos dividi-lo.
+        text_chunks = split_text_into_chunks(text_to_speak)
+
+        # Inicializa um objeto de áudio vazio com pydub
+        final_audio = AudioSegment.empty()
+        
         client = genai.Client(api_key=API_KEY)
         model_name = "gemini-2.5-pro-preview-tts"
-        
-        # A API espera uma lista de conteúdos
-        contents = [types.Content(role="user", parts=[types.Part.from_text(text=text_to_speak)])]
-        
-        generation_config = types.GenerateContentConfig(
-            response_modalities=["audio"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_id)
-                )
-            ),
-        )
 
-        full_audio_data = bytearray()
-        audio_mime_type = "audio/L16;rate=24000"
+        # Itera sobre cada pedaço do texto
+        for chunk_text in text_chunks:
+            if not chunk_text:
+                continue
 
-        try:
-            stream = client.models.generate_content_stream(
-                model=model_name, 
-                contents=contents, 
-                config=generation_config
+            contents = [types.Content(role="user", parts=[types.Part.from_text(text=chunk_text)])]
+            generation_config = types.GenerateContentConfig(
+                response_modalities=["audio"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_id)
+                    )
+                ),
             )
-            for chunk in stream:
-                if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                    part = chunk.candidates[0].content.parts[0]
-                    if part.inline_data and part.inline_data.data:
-                        full_audio_data.extend(part.inline_data.data)
-                        if part.inline_data.mime_type:
-                            audio_mime_type = part.inline_data.mime_type
-        except Exception as api_error:
-            error_message = f"A API do Gemini retornou um erro: {api_error}"
-            print(f"ERRO NA API GEMINI: {error_message}")
-            return jsonify({"error": error_message}), 422
 
-        if not full_audio_data:
-            return jsonify({"error": "A API não retornou dados de áudio válidos."}), 500
+            full_audio_data = bytearray()
+            audio_mime_type = "audio/L16;rate=24000"
 
-        wav_data = convert_to_wav(bytes(full_audio_data), audio_mime_type)
-        
-        wav_file_in_memory = io.BytesIO(wav_data)
-        audio = AudioSegment.from_file(wav_file_in_memory, format="wav")
+            try:
+                stream = client.models.generate_content_stream(
+                    model=model_name, 
+                    contents=contents, 
+                    config=generation_config
+                )
+                for chunk in stream:
+                    if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
+                        part = chunk.candidates[0].content.parts[0]
+                        if part.inline_data and part.inline_data.data:
+                            full_audio_data.extend(part.inline_data.data)
+                            if part.inline_data.mime_type:
+                                audio_mime_type = part.inline_data.mime_type
+            except Exception as api_error:
+                error_message = f"A API do Gemini retornou um erro em um dos trechos do texto: {api_error}"
+                print(f"ERRO NA API GEMINI: {error_message}")
+                # Não retorna erro aqui, apenas loga e continua, para tentar gerar o resto do áudio.
+                continue
 
+            if not full_audio_data:
+                continue
+
+            # Converte o áudio do chunk para um objeto pydub e o adiciona ao áudio final
+            wav_data = convert_to_wav(bytes(full_audio_data), audio_mime_type)
+            wav_file_in_memory = io.BytesIO(wav_data)
+            audio_chunk = AudioSegment.from_file(wav_file_in_memory, format="wav")
+            final_audio += audio_chunk
+
+        # Verifica se algum áudio foi gerado no final
+        if len(final_audio) == 0:
+            return jsonify({"error": "Não foi possível gerar áudio para o texto fornecido após a limpeza e divisão."}), 500
+
+        # Exporta o áudio final completo para MP3 em alta qualidade
         mp3_file_in_memory = io.BytesIO()
-        audio.export(mp3_file_in_memory, format="mp3", bitrate="320k")
+        final_audio.export(mp3_file_in_memory, format="mp3", bitrate="320k")
         mp3_data = mp3_file_in_memory.getvalue()
         
         audio_base64 = base64.b64encode(mp3_data).decode('utf-8')
