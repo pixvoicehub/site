@@ -214,7 +214,7 @@ def generate_narration():
 
         # Exporta para MP3 em memória
         mp3_buffer = io.BytesIO()
-        final_audio.export(mp3_buffer, format="mp3", bitrate="320k")
+        final_audio.export(mp3_buffer, format="mp3", bitrate="128k")
         mp3_data = mp3_buffer.getvalue()
 
         # Codifica em base64
