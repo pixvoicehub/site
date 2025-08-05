@@ -1,10 +1,10 @@
-# app.py - VERSÃO DEFINITIVA COM SUPORTE A TEXTOS LONGOS (CHUNKING)
+# app.py - VERSÃO ATUALIZADA COM CHUNKING PARA TEXTOS LONGOS
+
 import os
 import base64
 import struct
 import io
 import re
-import time
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from google import genai
@@ -74,10 +74,10 @@ def split_text_into_chunks(text, max_chars=MAX_CHARS_PER_CHUNK):
                 if current_chunk:
                     chunks.append(current_chunk.strip())
                 current_chunk = sentence + " "
-    
+
     if current_chunk.strip():
         chunks.append(current_chunk.strip())
-    
+
     return chunks
 
 
