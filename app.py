@@ -1,4 +1,4 @@
-# app.py - VERSÃO FINAL CONSOLIDADA (Limpeza + Chunking)
+# app.py - VERSÃO FINAL CONSOLIDADA (Limpeza + Suporte a Textos Longos)
 import os
 import base64
 import struct
@@ -51,37 +51,64 @@ def sanitize_and_normalize_text(text):
     
     return text
 
+# ==============================================================================
+# 7. Garante que gere a narração de qualquer tamanho de texto (até o limite de palavras)
+# ==============================================================================
 def split_text_into_chunks(text, max_length=4500):
-    """Divide o texto em pedaços menores, quebrando em sentenças."""
+    """
+    Divide o texto em pedaços menores que 4500 caracteres (limite seguro da API),
+    tentando quebrar a divisão no final de uma sentença para um áudio mais natural.
+    """
+    # Primeiro, divide o texto em sentenças usando pontuação final como delimitador.
     sentences = re.split(r'(?<=[.!?])\s+', text)
+    
     chunks = []
     current_chunk = ""
+
     for sentence in sentences:
+        # Se adicionar a próxima sentença não excede o limite, adiciona ao pedaço atual.
         if len(current_chunk) + len(sentence) + 1 < max_length:
             current_chunk += sentence + " "
         else:
-            if current_chunk: chunks.append(current_chunk.strip())
+            # Se o pedaço atual não estiver vazio, adiciona à lista de pedaços.
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            # A sentença atual se torna o início do próximo pedaço.
             current_chunk = sentence + " "
-    if current_chunk: chunks.append(current_chunk.strip())
+            
+    # Adiciona o último pedaço restante à lista.
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+        
     return chunks
 
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
-    # (Esta função permanece inalterada)
+    """Converte dados de áudio brutos para o formato WAV adicionando o cabeçalho."""
     parameters = parse_audio_mime_type(mime_type)
-    bits_per_sample = parameters.get("bits_per_sample", 16); sample_rate = parameters.get("rate", 24000); num_channels = 1; data_size = len(audio_data); bytes_per_sample = bits_per_sample // 8; block_align = num_channels * bytes_per_sample; byte_rate = sample_rate * block_align; chunk_size = 36 + data_size
+    bits_per_sample = parameters.get("bits_per_sample", 16)
+    sample_rate = parameters.get("rate", 24000)
+    num_channels = 1
+    data_size = len(audio_data)
+    bytes_per_sample = bits_per_sample // 8
+    block_align = num_channels * bytes_per_sample
+    byte_rate = sample_rate * block_align
+    chunk_size = 36 + data_size
     header = struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", chunk_size, b"WAVE", b"fmt ", 16, 1, num_channels, sample_rate, byte_rate, block_align, bits_per_sample, b"data", data_size)
     return header + audio_data
 
 def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
-    # (Esta função permanece inalterada)
-    rate = 24000; bits_per_sample = 16
+    """Extrai a taxa de amostragem do MIME type."""
+    rate = 24000
+    bits_per_sample = 16
     if mime_type:
         parts = mime_type.split(";")
         for param in parts:
             param = param.strip()
             if param.lower().startswith("rate="):
-                try: rate = int(param.split("=", 1)[1])
-                except (ValueError, IndexError): pass
+                try:
+                    rate = int(param.split("=", 1)[1])
+                except (ValueError, IndexError):
+                    pass
     return {"bits_per_sample": bits_per_sample, "rate": rate}
 
 # --- Rotas da API ---
@@ -105,15 +132,17 @@ def generate_narration():
         # 1. Limpa e normaliza o texto recebido
         normalized_text = sanitize_and_normalize_text(text_to_speak)
         
-        # 2. Divide o texto limpo em pedaços gerenciáveis
+        # 2. [NOVO] Divide o texto limpo em pedaços gerenciáveis
         text_chunks = split_text_into_chunks(normalized_text)
 
+        # Cria um segmento de áudio vazio para juntar os pedaços
         final_audio = AudioSegment.empty()
         client = genai.Client(api_key=API_KEY)
-        model_name = "gemini-2.5-pro-preview-tts"
+        model_name = "gemini-2.5-pro-preview-tts" # Modelo TTS correto
 
+        # 3. [NOVO] Itera sobre cada pedaço de texto e gera o áudio
         for chunk_text in text_chunks:
-            if not chunk_text: continue
+            if not chunk_text: continue # Pula pedaços vazios
 
             contents = [types.Content(role="user", parts=[types.Part.from_text(text=chunk_text)])]
             generation_config = types.GenerateContentConfig(
@@ -143,17 +172,23 @@ def generate_narration():
 
             if not full_audio_data: continue
 
+            # Converte o áudio bruto para WAV e depois para um objeto Pydub
             wav_data = convert_to_wav(bytes(full_audio_data), audio_mime_type)
             audio_chunk = AudioSegment.from_file(io.BytesIO(wav_data), format="wav")
+            
+            # Adiciona o áudio do pedaço ao áudio final
             final_audio += audio_chunk
 
+        # 4. [NOVO] Verifica se o áudio final foi criado
         if len(final_audio) == 0:
             return jsonify({"error": "Não foi possível gerar áudio para o texto fornecido."}), 500
 
+        # 5. [NOVO] Exporta o áudio completo para MP3 em memória
         mp3_file_in_memory = io.BytesIO()
         final_audio.export(mp3_file_in_memory, format="mp3", bitrate="320k")
         mp3_data = mp3_file_in_memory.getvalue()
         
+        # 6. Codifica o MP3 final em base64 e envia como resposta
         audio_base64 = base64.b64encode(mp3_data).decode('utf-8')
         return jsonify({"audioContent": audio_base64})
 
