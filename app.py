@@ -1,9 +1,11 @@
-# app.py - VERSÃO FINAL CONSOLIDADA (Limpeza + Suporte a Textos Longos)
+# app.py - VERSÃO FINAL OTIMIZADA PARA MEMÓRIA
 import os
 import base64
 import struct
 import io
 import re
+import tempfile
+import gc
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from google import genai
@@ -20,101 +22,53 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     raise ValueError("ERRO CRÍTICO: A chave da API do Gemini (GEMINI_API_KEY) não está definida.")
 
-# --- Funções de Suporte ---
-
+# --- Funções de Suporte (sem alterações) ---
 def sanitize_and_normalize_text(text):
-    """
-    Função robusta que limpa e normaliza o texto para máxima compatibilidade com TTS.
-    """
-    if not isinstance(text, str):
-        text = str(text)
-
-    # 1. Normaliza preços: "R$ 249,00" -> "249 reais"
+    if not isinstance(text, str): text = str(text)
     text = re.sub(r'R\$\s*([\d,.]+)', lambda m: m.group(1).replace('.', '').replace(',', ' vírgula ') + ' reais', text)
-    
-    # 2. Normaliza "12X" ou "12x": "12X SEM JUROS" -> "12 vezes sem juros"
     text = re.sub(r'(\d+)\s*[xX](?!\w)', r'\1 vezes ', text)
-
-    # 3. Substitui travessões e hífens por vírgula para criar uma pausa.
     text = re.sub(r'\s*[-–—]\s*', ', ', text)
-    
-    # 4. Normaliza pontuação excessiva.
     text = re.sub(r'(!+)', '!', text)
     text = re.sub(r'(\?+)', '?', text)
     text = re.sub(r'(\.+)', '.', text)
-    
-    # 5. Remove caracteres que não são úteis para a fala.
     text = re.sub(r'[^\w\s.,!?áéíóúâêîôûãõàèìòùçÁÉÍÓÚÂÊÎÔÛÃÕÀÈÌÒÙÇ]', '', text)
-    
-    # 6. Garante espaços consistentes.
     text = re.sub(r'\s+', ' ', text).strip()
-    
     return text
 
-# ==============================================================================
-# 7. Garante que gere a narração de qualquer tamanho de texto (até o limite de palavras)
-# ==============================================================================
 def split_text_into_chunks(text, max_length=4500):
-    """
-    Divide o texto em pedaços menores que 4500 caracteres (limite seguro da API),
-    tentando quebrar a divisão no final de uma sentença para um áudio mais natural.
-    """
-    # Primeiro, divide o texto em sentenças usando pontuação final como delimitador.
     sentences = re.split(r'(?<=[.!?])\s+', text)
-    
     chunks = []
     current_chunk = ""
-
     for sentence in sentences:
-        # Se adicionar a próxima sentença não excede o limite, adiciona ao pedaço atual.
         if len(current_chunk) + len(sentence) + 1 < max_length:
             current_chunk += sentence + " "
         else:
-            # Se o pedaço atual não estiver vazio, adiciona à lista de pedaços.
-            if current_chunk:
-                chunks.append(current_chunk.strip())
-            # A sentença atual se torna o início do próximo pedaço.
+            if current_chunk: chunks.append(current_chunk.strip())
             current_chunk = sentence + " "
-            
-    # Adiciona o último pedaço restante à lista.
-    if current_chunk:
-        chunks.append(current_chunk.strip())
-        
+    if current_chunk: chunks.append(current_chunk.strip())
     return chunks
 
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
-    """Converte dados de áudio brutos para o formato WAV adicionando o cabeçalho."""
     parameters = parse_audio_mime_type(mime_type)
-    bits_per_sample = parameters.get("bits_per_sample", 16)
-    sample_rate = parameters.get("rate", 24000)
-    num_channels = 1
-    data_size = len(audio_data)
-    bytes_per_sample = bits_per_sample // 8
-    block_align = num_channels * bytes_per_sample
-    byte_rate = sample_rate * block_align
-    chunk_size = 36 + data_size
+    bits_per_sample = parameters.get("bits_per_sample", 16); sample_rate = parameters.get("rate", 24000); num_channels = 1; data_size = len(audio_data); bytes_per_sample = bits_per_sample // 8; block_align = num_channels * bytes_per_sample; byte_rate = sample_rate * block_align; chunk_size = 36 + data_size
     header = struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", chunk_size, b"WAVE", b"fmt ", 16, 1, num_channels, sample_rate, byte_rate, block_align, bits_per_sample, b"data", data_size)
     return header + audio_data
 
 def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
-    """Extrai a taxa de amostragem do MIME type."""
-    rate = 24000
-    bits_per_sample = 16
+    rate = 24000; bits_per_sample = 16
     if mime_type:
         parts = mime_type.split(";")
         for param in parts:
             param = param.strip()
             if param.lower().startswith("rate="):
-                try:
-                    rate = int(param.split("=", 1)[1])
-                except (ValueError, IndexError):
-                    pass
+                try: rate = int(param.split("=", 1)[1])
+                except (ValueError, IndexError): pass
     return {"bits_per_sample": bits_per_sample, "rate": rate}
 
 # --- Rotas da API ---
 @app.route('/')
 def home():
-    return "Serviço de Narração está online (v4.0 - Solução Definitiva)."
+    return "Serviço de Narração está online (v5.0 - Otimizado para Memória)."
 
 @app.route('/health')
 def health_check():
@@ -128,31 +82,19 @@ def generate_narration():
     voice_id = data.get('voiceId')
     if not text_to_speak or not voice_id: return jsonify({"error": "Os campos 'text' e 'voiceId' são obrigatórios."}), 400
 
+    temp_files = []
     try:
-        # 1. Limpa e normaliza o texto recebido
         normalized_text = sanitize_and_normalize_text(text_to_speak)
-        
-        # 2. [NOVO] Divide o texto limpo em pedaços gerenciáveis
         text_chunks = split_text_into_chunks(normalized_text)
 
-        # Cria um segmento de áudio vazio para juntar os pedaços
-        final_audio = AudioSegment.empty()
         client = genai.Client(api_key=API_KEY)
-        model_name = "gemini-2.5-pro-preview-tts" # Modelo TTS correto
+        model_name = "gemini-2.5-pro-preview-tts"
 
-        # 3. [NOVO] Itera sobre cada pedaço de texto e gera o áudio
-        for chunk_text in text_chunks:
-            if not chunk_text: continue # Pula pedaços vazios
+        for i, chunk_text in enumerate(text_chunks):
+            if not chunk_text: continue
 
             contents = [types.Content(role="user", parts=[types.Part.from_text(text=chunk_text)])]
-            generation_config = types.GenerateContentConfig(
-                response_modalities=["audio"],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_id)
-                    )
-                ),
-            )
+            generation_config = types.GenerateContentConfig(response_modalities=["audio"], speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_id))))
 
             full_audio_data = bytearray()
             audio_mime_type = "audio/L16;rate=24000"
@@ -166,36 +108,49 @@ def generate_narration():
                             full_audio_data.extend(part.inline_data.data)
                             if part.inline_data.mime_type: audio_mime_type = part.inline_data.mime_type
             except Exception as api_error:
-                error_message = f"A API do Gemini falhou ao processar um trecho do texto: {api_error}"
-                print(f"ERRO NA API GEMINI: {error_message}")
-                return jsonify({"error": error_message}), 422
+                return jsonify({"error": f"A API do Gemini falhou ao processar um trecho: {api_error}"}), 422
 
             if not full_audio_data: continue
 
-            # Converte o áudio bruto para WAV e depois para um objeto Pydub
+            # [OTIMIZAÇÃO] Salva o pedaço em um arquivo temporário no disco em vez de manter na RAM
             wav_data = convert_to_wav(bytes(full_audio_data), audio_mime_type)
-            audio_chunk = AudioSegment.from_file(io.BytesIO(wav_data), format="wav")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+                temp_file.write(wav_data)
+                temp_files.append(temp_file.name)
             
-            # Adiciona o áudio do pedaço ao áudio final
-            final_audio += audio_chunk
+            # Libera a memória explicitamente
+            del full_audio_data
+            del wav_data
+            gc.collect()
 
-        # 4. [NOVO] Verifica se o áudio final foi criado
-        if len(final_audio) == 0:
+        if not temp_files:
             return jsonify({"error": "Não foi possível gerar áudio para o texto fornecido."}), 500
 
-        # 5. [NOVO] Exporta o áudio completo para MP3 em memória
+        # [OTIMIZAÇÃO] Concatena os arquivos do disco, um por um, para manter o uso de RAM baixo
+        final_audio = AudioSegment.empty()
+        for temp_file_path in temp_files:
+            audio_chunk = AudioSegment.from_file(temp_file_path, format="wav")
+            final_audio += audio_chunk
+            del audio_chunk # Libera a memória do pedaço após a junção
+            gc.collect()
+
         mp3_file_in_memory = io.BytesIO()
         final_audio.export(mp3_file_in_memory, format="mp3", bitrate="320k")
         mp3_data = mp3_file_in_memory.getvalue()
         
-        # 6. Codifica o MP3 final em base64 e envia como resposta
         audio_base64 = base64.b64encode(mp3_data).decode('utf-8')
         return jsonify({"audioContent": audio_base64})
 
     except Exception as e:
         print(f"ERRO INESPERADO NO SERVIDOR: {e}")
         return jsonify({"error": f"Ocorreu um erro interno no servidor Python. Detalhe: {e}"}), 500
+    finally:
+        # [OTIMIZAÇÃO] Garante que todos os arquivos temporários sejam deletados
+        for temp_file_path in temp_files:
+            try:
+                os.remove(temp_file_path)
+            except OSError:
+                pass
 
-# --- Bloco de Execução Local ---
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
