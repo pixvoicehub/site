@@ -1,4 +1,4 @@
-# app.py - VERSÃO OTIMIZADA PARA 512MB RAM (Render.com Free)
+# app.py - VERSÃO ULTRA-LEVE PARA 512MB (Render.com Free)
 
 import os
 import base64
@@ -13,7 +13,6 @@ from google.genai import types
 from dotenv import load_dotenv
 from pydub import AudioSegment
 
-# --- Configuração Inicial ---
 load_dotenv()
 
 app = Flask(__name__)
@@ -23,36 +22,31 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     raise ValueError("ERRO: GEMINI_API_KEY não definida.")
 
-# Limites seguros para baixa memória
-MAX_CHARS_PER_CHUNK = 350  # Evita chunks muito grandes
-MAX_RETRIES = 2
+# Limites seguros
+MAX_CHARS_PER_CHUNK = 300  # Muito pequeno para não estourar memória
+BITRATE = "128k"  # Menor bitrate = menos memória
 
 def sanitize_and_normalize_text(text):
     if not isinstance(text, str): text = str(text)
     text = re.sub(r'R\$\s*([\d,.]+)', r'\1 reais', text)
     text = re.sub(r'(\d+)\s*[xX](?!\w)', r'\1 vezes ', text)
     text = re.sub(r'\s*[-–—]\s*', ', ', text)
-    text = re.sub(r'[^\w\s.,!?áéíóúâêîôûãõàèìòùçÁÉÍÓÚÂÊÎÔÛÃÕÀÈÌÒÙÇ]', '', text)
-    return re.sub(r'\s+', ' ', text).strip()
+    return re.sub(r'[^\w\s.,!?áéíóúâêîôûãõàèìòùçÁÉÍÓÚÂÊÎÔÛÃÕÀÈÌÒÙÇ]', '', text).strip()
 
 def split_text_into_chunks(text, max_chars=MAX_CHARS_PER_CHUNK):
     sentences = re.split(r'(?<=[.!?])\s+', text)
     chunks = []
-    current_chunk = ""
+    current = ""
     for sentence in sentences:
-        if len(current_chunk) + len(sentence) <= max_chars:
-            current_chunk += sentence + " "
+        if len(current) + len(sentence) <= max_chars:
+            current += sentence + " "
         else:
-            if current_chunk: chunks.append(current_chunk.strip())
-            # Quebra frases muito longas
-            while len(sentence) > max_chars:
-                chunks.append(sentence[:max_chars].strip())
-                sentence = sentence[max_chars:]
-            current_chunk = sentence + " " if sentence else ""
-    if current_chunk.strip(): chunks.append(current_chunk.strip())
+            if current: chunks.append(current.strip())
+            current = sentence + " "
+    if current.strip(): chunks.append(current.strip())
     return chunks
 
-def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
+def convert_to_wav(audio_ bytes, mime_type: str) -> bytes:
     rate = 24000
     if mime_type and "rate=" in mime_type:
         try: rate = int(mime_type.split("rate=")[1].split(";")[0])
@@ -62,7 +56,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 
 @app.route('/')
 def home():
-    return "TTS Online (v7.3 - Low Memory)"
+    return "TTS Online (v7.4 - Ultra-Leve)"
 
 @app.route('/health')
 def health():
@@ -86,7 +80,7 @@ def generate_narration():
         final_audio = None
 
         for i, chunk in enumerate(chunks):
-            if len(chunk.strip()) == 0: continue
+            if not chunk.strip(): continue
             print(f"[CHUNK {i+1}/{len(chunks)}] Gerando... ({len(chunk)} chars)")
 
             contents = [types.Content(role="user", parts=[types.Part.from_text(text=chunk)])]
@@ -100,26 +94,57 @@ def generate_narration():
             )
 
             full_data = bytearray()
-            success = False
-            for attempt in range(MAX_RETRIES):
-                try:
-                    stream = client.models.generate_content_stream(model=model, contents=contents, config=config)
-                    for response in stream:
-                        if response.candidates and response.candidates[0].content.parts:
-                            part = response.candidates[0].content.parts[0]
-                            if part.inline_data and part.inline_data.
-                                full_data.extend(part.inline_data.data)
-                    if full_data:
-                        success = True
-                        break
-                except Exception as e:
-                    print(f"[TENTATIVA {attempt+1}] Erro no stream: {e}")
-                    if attempt < MAX_RETRIES - 1: gc.collect()
+            try:
+                stream = client.models.generate_content_stream(model=model, contents=contents, config=config)
+                for response in stream:
+                    if response.candidates and response.candidates[0].content.parts:
+                        part = response.candidates[0].content.parts[0]
+                        if part.inline_data and part.inline_data.
+                            full_data.extend(part.inline_data.data)
+            except Exception as e:
+                print(f"[ERRO] Falha no stream: {e}")
+                continue
 
-            if not success or not full_data:
-                print(f"[FALHA] Chunk {i+1} não gerou áudio.")
+            if not full_
+                print(f"[AVISO] Chunk {i+1} não gerou áudio.")
                 continue
 
             try:
                 wav_data = convert_to_wav(bytes(full_data), "audio/L16;rate=24000")
-               
+                segment = AudioSegment.from_file(io.BytesIO(wav_data), format="wav")
+                segment += AudioSegment.silent(100)
+            except Exception as e:
+                print(f"[ERRO] Falha ao converter áudio: {e}")
+                continue
+
+            if final_audio is None:
+                final_audio = segment
+            else:
+                final_audio += segment
+
+            # Libera memória AGRESSIVAMENTE
+            del full_data, wav_data, segment
+            gc.collect()
+
+        if final_audio is None:
+            return jsonify({"error": "Nenhum áudio foi gerado."}), 500
+
+        # Exporta em MP3 com baixo uso de memória
+        mp3_buffer = io.BytesIO()
+        final_audio.export(mp3_buffer, format="mp3", bitrate=BITRATE)
+        mp3_data = mp3_buffer.getvalue()
+
+        # Libera memória
+        del final_audio, mp3_buffer
+        gc.collect()
+
+        audio_base64 = base64.b64encode(mp3_data).decode('utf-8')
+        return jsonify({"audioContent": audio_base64})
+
+    except Exception as e:
+        print(f"ERRO INESPERADO: {e}")
+        return jsonify({"error": "Erro interno no servidor."}), 500
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(debug=False, host='0.0.0.0', port=port)
