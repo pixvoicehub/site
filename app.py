@@ -1,18 +1,19 @@
-# app.py - VERSÃO FINAL E ULTRA-LEVE PARA RENDER GRATUITO
+# app.py - VERSÃO FINAL CORRIGIDA E OTIMIZADA PARA RENDER GRATUITO
 
 import os
 import base64
 import struct
 import io
 import re
+import gc
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from pydub import AudioSegment
-import gc
 
+# --- Configuração Inicial ---
 load_dotenv()
 
 app = Flask(__name__)
@@ -22,32 +23,64 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     raise ValueError("ERRO CRÍTICO: A chave da API do Gemini (GEMINI_API_KEY) não está definida.")
 
+# --- Funções de Suporte ---
+
 def sanitize_and_normalize_text(text):
-    if not isinstance(text, str): text = str(text)
+    """Limpa e normaliza o texto para melhorar a síntese de fala."""
+    if not isinstance(text, str):
+        text = str(text)
+    # Substitui moedas, X por 'vezes', etc.
     text = re.sub(r'R\$\s*([\d,.]+)', lambda m: m.group(1).replace('.', '').replace(',', ' vírgula ') + ' reais', text)
     text = re.sub(r'(\d+)\s*[xX](?!\w)', r'\1 vezes ', text)
     text = re.sub(r'\s*[-–—]\s*', ', ', text)
+    text = re.sub(r'(!+)', '!', text)
+    text = re.sub(r'(\?+)', '?', text)
+    text = re.sub(r'(\.+)', '.', text)
     text = re.sub(r'[^\w\s.,!?áéíóúâêîôûãõàèìòùçÁÉÍÓÚÂÊÎÔÛÃÕÀÈÌÒÙÇ]', '', text)
-    return re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
-def split_text_into_chunks(text, max_chars=200):
+
+def split_text_into_chunks(text, max_chars=350):
+    """
+    Divide o texto em chunks menores, respeitando os limites do modelo TTS.
+    Prioriza quebras em frases completas.
+    """
     sentences = re.split(r'(?<=[.!?])\s+', text)
     chunks = []
     current_chunk = ""
 
     for sentence in sentences:
-        if len(current_chunk) + len(sentence) <= max_chars:
-            current_chunk += sentence + " "
+        # Se a frase já é muito longa, forçamos a quebra
+        if len(sentence) > max_chars:
+            while len(sentence) > max_chars:
+                chunk_part = sentence[:max_chars]
+                # Evita cortar no meio de uma palavra
+                last_space = chunk_part.rfind(' ')
+                if last_space > 0:
+                    chunk_part = sentence[:last_space]
+                    sentence = sentence[last_space:].strip()
+                else:
+                    sentence = sentence[max_chars:].strip()
+                chunks.append(chunk_part)
+            if sentence:
+                current_chunk = sentence + " "
         else:
-            if current_chunk: chunks.append(current_chunk.strip())
-            current_chunk = sentence + " "
-
+            if len(current_chunk) + len(sentence) + 1 <= max_chars:
+                current_chunk += sentence + " "
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                current_chunk = sentence + " "
+    
     if current_chunk.strip():
         chunks.append(current_chunk.strip())
-
+    
     return chunks
 
+
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
+    """Converte dados de áudio cru em formato WAV com cabeçalho válido."""
     parameters = parse_audio_mime_type(mime_type)
     bits_per_sample = parameters.get("bits_per_sample", 16)
     sample_rate = parameters.get("rate", 24000)
@@ -66,7 +99,9 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     )
     return header + audio_data
 
-def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
+
+def parse_audio_mime_type(mime_type: str) -> dict:
+    """Extrai informações de taxa de amostragem e bits do MIME type."""
     rate = 24000
     bits_per_sample = 16
     if mime_type:
@@ -74,22 +109,29 @@ def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
         for param in parts:
             param = param.strip()
             if param.lower().startswith("rate="):
-                try: rate = int(param.split("=", 1)[1])
-                except (ValueError, IndexError): pass
+                try:
+                    rate = int(param.split("=", 1)[1])
+                except (ValueError, IndexError):
+                    pass
     return {"bits_per_sample": bits_per_sample, "rate": rate}
+
+
+# --- Rota da API ---
 
 @app.route('/')
 def home():
-    return "Serviço de Narração está online (v9.0 - Ultra-Leve)."
+    return "Serviço de Narração está online (v8.0 - Corrigido e Otimizado)."
+
 
 @app.route('/health')
 def health_check():
     return "API de Narração está saudável.", 200
 
+
 @app.route('/generate-narration', methods=['POST'])
 def generate_narration():
     data = request.get_json()
-    if not 
+    if not data:  # ✅ Corrigido: condição completa
         return jsonify({"error": "Requisição JSON inválida."}), 400
 
     text_to_speak = data.get('text')
@@ -99,13 +141,18 @@ def generate_narration():
         return jsonify({"error": "Os campos 'text' e 'voiceId' são obrigatórios."}), 400
 
     try:
+        # Normaliza o texto
         normalized_text = sanitize_and_normalize_text(text_to_speak)
-        chunks = split_text_into_chunks(normalized_text, max_chars=200)
-        print(f"[INFO] Texto recebido: {len(normalized_text)} caracteres | {len(chunks)} chunks")
+        print(f"[INFO] Texto recebido: {len(normalized_text)} caracteres")
+
+        # Divide em chunks
+        chunks = split_text_into_chunks(normalized_text, max_chars=350)
+        print(f"[INFO] Texto dividido em {len(chunks)} partes.")
 
         if not chunks:
             return jsonify({"error": "Texto processado resultou em nenhum conteúdo válido."}), 400
 
+        # Configuração do modelo
         client = genai.Client(api_key=API_KEY)
         model_name = "gemini-2.5-pro-preview-tts"
         generation_config = types.GenerateContentConfig(
@@ -117,45 +164,55 @@ def generate_narration():
             )
         )
 
-        final_audio_segments = []
+        # Armazena todos os áudios gerados
+        all_audio_segments = []
 
         for i, chunk_text in enumerate(chunks):
             print(f"[CHUNK {i+1}/{len(chunks)}] Gerando áudio... ({len(chunk_text)} caracteres)")
             contents = [types.Content(role="user", parts=[types.Part.from_text(text=chunk_text)])]
-            stream = client.models.generate_content_stream(
-                model=model_name,
-                contents=contents,
-                config=generation_config
-            )
+            try:
+                stream = client.models.generate_content_stream(
+                    model=model_name,
+                    contents=contents,
+                    config=generation_config
+                )
+                full_audio_data = bytearray()
+                audio_mime_type = "audio/L16;rate=24000"
 
-            full_audio_data = bytearray()
-            audio_mime_type = "audio/L16;rate=24000"
+                for response in stream:
+                    if response.candidates and response.candidates[0].content.parts:
+                        part = response.candidates[0].content.parts[0]
+                        if part.inline_data and part.inline_data.data:
+                            full_audio_data.extend(part.inline_data.data)
+                            if part.inline_data.mime_type:
+                                audio_mime_type = part.inline_data.mime_type
 
-            for response in stream:
-                if response.candidates and response.candidates[0].content.parts:
-                    part = response.candidates[0].content.parts[0]
-                    if part.inline_data and part.inline_data.data:
-                        full_audio_data.extend(part.inline_data.data)
-                        if part.inline_data.mime_type:
-                            audio_mime_type = part.inline_data.mime_type
+                if not full_audio_data:
+                    print(f"[AVISO] Nenhum áudio gerado para o chunk {i+1}.")
+                    continue
 
-            if not full_audio_
-                print(f"[AVISO] Nenhum áudio gerado para o chunk {i+1}.")
-                continue
+                # Converte para WAV e depois para AudioSegment
+                wav_data = convert_to_wav(bytes(full_audio_data), audio_mime_type)
+                audio_segment = AudioSegment.from_file(io.BytesIO(wav_data), format="wav")
+                all_audio_segments.append(audio_segment)
 
-            wav_data = convert_to_wav(bytes(full_audio_data), audio_mime_type)
-            audio_segment = AudioSegment.from_file(io.BytesIO(wav_data), format="wav")
-            final_audio_segments.append(audio_segment)
+                # Pequeno silêncio entre frases (100ms) para naturalidade
+                all_audio_segments.append(AudioSegment.silent(duration=100))
 
-            # Libera memória
-            del full_audio_data, wav_data, audio_segment
-            gc.collect()
+                # Libera memória
+                del full_audio_data, wav_data, audio_segment
+                gc.collect()
 
-        if not final_audio_segments:
+            except Exception as e:
+                print(f"[ERRO] Falha ao gerar áudio para chunk {i+1}: {e}")
+                return jsonify({"error": f"Erro ao gerar áudio (parte {i+1}): {str(e)}"}), 500
+
+        # Verifica se foi gerado algum áudio
+        if not all_audio_segments:
             return jsonify({"error": "Nenhum áudio foi gerado para o texto fornecido."}), 500
 
         # Concatena todos os segmentos
-        final_audio = sum(final_audio_segments)
+        final_audio = sum(all_audio_segments)  # concatena todos os segments
 
         # Exporta para MP3 em memória
         mp3_buffer = io.BytesIO()
@@ -166,6 +223,7 @@ def generate_narration():
         del final_audio, mp3_buffer
         gc.collect()
 
+        # Codifica em base64
         audio_base64 = base64.b64encode(mp3_data).decode('utf-8')
 
         print(f"[SUCESSO] Áudio final gerado com {len(mp3_data)} bytes.")
@@ -175,6 +233,8 @@ def generate_narration():
         print(f"ERRO INESPERADO NO SERVIDOR: {e}")
         return jsonify({"error": f"Erro interno: {e}"}), 500
 
+
+# --- Execução Local ---
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 5000))  # Render usa a variável PORT
     app.run(debug=False, host='0.0.0.0', port=port)
