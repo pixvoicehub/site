@@ -154,7 +154,7 @@ def generate_narration():
 
         # Configuração do modelo
         client = genai.Client(api_key=API_KEY)
-        model_name = "gemini-2.5-pro-preview-tts"
+        model_name = "gemini-2.5-flash-preview-tts"
         generation_config = types.GenerateContentConfig(
             response_modalities=["audio"],
             speech_config=types.SpeechConfig(
